@@ -19,14 +19,28 @@ define(['N/record', 'N/log'], function (record, log) {
         var salesOrder = context.newRecord;
         var lineCount = salesOrder.getLineCount({ sublistId: 'item' });
 
-        // Original (discontinued) SKU -- INTERNAL ID
-        var OLD_ITEM_ID = 63374;
+        /**
+         * SKU Mapping
+         * -----------
+         * OLD SKU: Discontinued item
+         *   - internalId: 63374
+         *   - itemName: 62080
+         *   - displayName: "26001SWC Waldoch Full Length Flare Boards For Ford E Series Vans 26001"
+         *
+         * NEW SKU (Sandbox test):
+         *   - internalId: 24844
+         *   - itemName: 30759
+         *   - externalId: "MS-RA670"
+         *   - displayName: "MS-RA670 Apollo Marine Entertainment System 3 Zones SiriusXM Ready Fusion"
+         *
+         * PRODUCTION SKU:
+         *   - internalId: 67803
+         *   - itemName: "F350"
+         *   - displayName: "BREMEN FULL LENGTH FLARE BOARDS FOR FORD E SERIES VANS"
+         */
 
-        // Sandbox test INTERNAL ID -- The actual part number that is supposed to be replaced does not exist in Sandbox - only in production 
-        var NEW_ITEM_ID = 24844;
-
-        // const production_SKU = "F350";
-        // const production_Internal_ID = 67803;
+        var OLD_ITEM_ID = 63374;    // Discontinued item
+        var NEW_ITEM_ID = 24844;    // Sandbox substitute for F350 (production ID: 67803)
 
 
         // Iterate through sales order to find the intended ITEM ID
