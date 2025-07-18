@@ -13,13 +13,13 @@ define(['N/currentRecord', 'N/log'], function (currentRecord, log) {
             var itemId = rec.getCurrentSublistValue({ sublistId: 'item', fieldId: 'item' });
 
             if (itemId == '63374') {
-                log.debug('Replacing discontinued item', 'Replacing item 63374 with 67803');
+                log.debug('Replacing discontinued item', 'Replacing item 63374 with 24844');
 
                 // Replace item
                 rec.setCurrentSublistValue({
                     sublistId: 'item',
                     fieldId: 'item',
-                    value: '67803'
+                    value: '24844'
                 });
 
                 // Set new description (or blank to auto-populate from item record)
@@ -58,12 +58,12 @@ define(['N/currentRecord', 'N/log'], function (currentRecord, log) {
             var itemId = rec.getCurrentSublistValue({ sublistId: 'item', fieldId: 'item' });
 
             if (itemId == '63374') {
-                log.debug('Item changed - replacing discontinued item early', 'Replacing item 63374 with 67803');
+                log.debug('Item changed - replacing discontinued item early', 'Replacing item 63374 with 24844');
 
                 rec.setCurrentSublistValue({
                     sublistId: 'item',
                     fieldId: 'item',
-                    value: '67803'
+                    value: '24844'
                 });
 
                 rec.setCurrentSublistValue({
