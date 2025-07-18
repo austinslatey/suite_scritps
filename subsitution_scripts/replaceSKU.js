@@ -1,39 +1,54 @@
 /**
  * @NApiVersion 2.x
  * @NScriptType ClientScript
+ * @NModuleScope Public
  */
-define(['N/currentRecord', 'N/log'], function (currentRecord, log) {
+define(['N/currentRecord', 'N/log'], function(currentRecord, log) {
 
-    function validateLine(context) {
-        var rec = currentRecord.get();
-        var sublistName = context.sublistId;
+  function validateLine(context) {
+    var rec = currentRecord.get();
+    var sublistName = context.sublistId;
 
-        if (sublistName !== 'item') return true;
+    if (sublistName === 'item') {
+      var itemId = rec.getCurrentSublistValue({ sublistId: 'item', fieldId: 'item' });
 
-        var OLD_ITEM_ID = 63374;   // Discontinued SKU internal ID
-        var NEW_ITEM_ID = 24844;   // Replacement SKU internal ID
+      if (itemId == '63374') {
+        log.debug('Replacing discontinued item', 'Replacing item 63374 with 24844');
 
-        var itemId = Number(rec.getCurrentSublistValue({
-            sublistId: 'item',
-            fieldId: 'item'
-        }));
+        // Replace item
+        rec.setCurrentSublistValue({
+          sublistId: 'item',
+          fieldId: 'item',
+          value: '24844'
+        });
 
-        log.audit("Checking current line", "Item ID: " + itemId);
+        // Set new description (or blank to auto-populate from item record)
+        rec.setCurrentSublistValue({
+          sublistId: 'item',
+          fieldId: 'description',
+          value: '' // blank means it should pull from item record if configured
+        });
 
-        if (itemId === OLD_ITEM_ID) {
-            log.audit("Match found", "Replacing discontinued item ID " + OLD_ITEM_ID + " with " + NEW_ITEM_ID);
+        // Clear rate so pricing can recalculate, or hardcode if necessary
+        rec.setCurrentSublistValue({
+          sublistId: 'item',
+          fieldId: 'rate',
+          value: ''
+        });
 
-            rec.setCurrentSublistValue({
-                sublistId: 'item',
-                fieldId: 'item',
-                value: NEW_ITEM_ID
-            });
-        }
-
-        return true;
+        // Clear MPN (assuming field ID is custcol_mpn – update if yours is different)
+        rec.setCurrentSublistValue({
+          sublistId: 'item',
+          fieldId: 'custitemcustom_mpn',
+          value: ''
+        });
+      }
     }
 
-    return {
-        validateLine: validateLine
-    };
+    return true;
+  }
+
+  return {
+    validateLine: validateLine
+  };
 });
