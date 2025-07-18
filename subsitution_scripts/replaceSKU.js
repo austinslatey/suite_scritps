@@ -26,7 +26,8 @@ define(['N/currentRecord', 'N/log'], function(currentRecord, log) {
         rec.setCurrentSublistValue({
           sublistId: 'item',
           fieldId: 'description',
-          value: '' // blank means it should pull from item record if configured
+          // blank means it should pull from item record if configured
+          value: '' 
         });
 
         // Clear rate so pricing can recalculate, or hardcode if necessary
@@ -36,7 +37,7 @@ define(['N/currentRecord', 'N/log'], function(currentRecord, log) {
           value: ''
         });
 
-        // Clear MPN (assuming field ID is custcol_mpn – update if yours is different)
+        // Clear MPN
         rec.setCurrentSublistValue({
           sublistId: 'item',
           fieldId: 'custitemcustom_mpn',
