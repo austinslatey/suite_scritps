@@ -8,7 +8,9 @@ Currently I have a problem that I may need to write a script for in NetSuite
 - NetSuite
 
 ## Problem Statement
-Currently I have two different part numbers inside of Shopify, and I would like one of those part-numbers to be automatically converted to a different part-number once it's purchased and lands in netsuite.
+Client Script that triggers when a user creates or enters a discontinued SKU (internal ID: 63374, SKU: 26001SWC) on the Sales Order item sublist. The script automatically replaces the discontinued SKU with the substitute SKU (MS-RA670, internal ID: 24844) immediately before the line is committed.
+
+This approach ensures accurate SKU substitution occurs interactively during order entry, preserving the seamless user experience.
 
 
 #### Why
