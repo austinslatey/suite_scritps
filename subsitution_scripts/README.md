@@ -14,12 +14,15 @@ This approach ensures accurate SKU substitution occurs interactively during orde
 
 
 #### Why
-There is much more traffic on one part number than the other but the one that has more traffic is not provided by that specific manufacturer anymore... I would like to keep the 'not provided by the specific manufacturer anymore' so I don't delete the SEO that is tied to it.  
+- Immediate replacement of discontinued SKUs during line entry.
 
-The other part-number is the same it's just made by a different manufacturer.
-This is the reason I dont want to remove the first number all together, but re-route it to the other part-number that recieves less traffic in NetSuite.
+- Ensures fulfillment uses the correct, active SKU without changing user habits.
 
-simplified: two part numbers in Shopify, rerouted to the same part number in netsuite.
+- Aligns with NetSuite’s scripting best practices.
+
+- Tested and verified working in your sandbox environment.
+
 
 ## Resolution
-Let me know how to resolve this
+Deploy this client script on the Sales Order record and retry adding the discontinued SKU. The script will automatically replace it upon entry. In the meantime, We will set the status of this case to pending customer review to give you time to consider the details mentioned above. 
+ 
