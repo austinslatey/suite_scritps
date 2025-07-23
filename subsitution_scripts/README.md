@@ -50,3 +50,26 @@ Once this script is fully implemented these feature should be considered
     - Replacement Part 1
     - Replacement Part 2
     - Replacement Part 3
+
+
+## Substitute_Field.js
+A User Event Script that:
+
+- Adds a mandatory 'Substitute Type' select field to the Item Substitute page
+
+- Provides options for 'Superceded' and 'Replacement'
+
+- Enforces the selection before saving
+
+## Substitute.js
+A Client Script that:
+
+- Triggers on line item validation in Sales Orders
+
+- Searches for substitute items for the selected item
+
+- Displays appropriate alerts based on substitute type
+
+- Automatically replaces superceded items
+
+- Prompts for confirmation on replacement items
