@@ -3,36 +3,72 @@
  * @NScriptType UserEventScript
  * @NModuleScope SameAccount
  */
-define(['N/record', 'N/ui/serverWidget'], function(record, serverWidget) {
+define(['N/record', 'N/ui/serverWidget', 'N/log'], function (record, serverWidget, log) {
     function beforeLoad(context) {
         if (context.type === context.UserEventType.CREATE || context.type === context.UserEventType.EDIT) {
             var form = context.form;
+            var itemRecord = context.newRecord;
 
-            // Add custom field to Item Substitute form with custpage prefix
-            var substituteTypeField = form.addField({
-                id: 'custpage_substitute_type',
-                type: serverWidget.FieldType.SELECT,
-                label: 'Substitute Type',
-                source: 'customlist_substitute_type' // Reference the custom list
+            log.debug({
+                title: 'Before Load',
+                details: 'Processing Inventory Item form, type: ' + context.type + ', record ID: ' + (itemRecord.id || 'New')
             });
 
-            substituteTypeField.isMandatory = true;
+            // Ensure the Substitutes sublist has the custom field
+            var sublist = form.getSublist({ id: 'itemsubstitution' });
+            if (sublist) {
+                var substituteTypeField = sublist.addField({
+                    id: 'custpage_substitute_type',
+                    type: serverWidget.FieldType.SELECT,
+                    label: 'Substitute Type',
+                    source: 'customlist_substitute_type'
+                });
+                substituteTypeField.isMandatory = true;
+            } else {
+                log.error({
+                    title: 'Sublist Not Found',
+                    details: 'Substitutes sublist (itemsubstitution) not found on form'
+                });
+            }
         }
     }
 
     function beforeSubmit(context) {
         if (context.type === context.UserEventType.CREATE || context.type === context.UserEventType.EDIT) {
-            var substituteRecord = context.newRecord;
-            var substituteType = substituteRecord.getValue('custpage_substitute_type');
+            var itemRecord = context.newRecord;
+            var sublistLineCount = itemRecord.getLineCount({ sublistId: 'itemsubstitution' });
 
-            // Store the form field value in the custom record field
-            if (substituteType) {
-                substituteRecord.setValue({
-                    fieldId: 'custrecord_substitute_type',
-                    value: substituteType
+            log.debug({
+                title: 'Before Submit',
+                details: 'Processing Inventory Item, ID: ' + (itemRecord.id || 'New') + ', Substitute Lines: ' + sublistLineCount
+            });
+
+            for (var i = 0; i < sublistLineCount; i++) {
+                var formValue = itemRecord.getSublistValue({
+                    sublistId: 'itemsubstitution',
+                    fieldId: 'custpage_substitute_type',
+                    line: i
                 });
-            } else {
-                throw new Error('Substitute Type is required.');
+
+                log.debug({
+                    title: 'Before Submit Line ' + (i + 1),
+                    details: 'Form value of custpage_substitute_type: ' + formValue
+                });
+
+                if (formValue) {
+                    itemRecord.setSublistValue({
+                        sublistId: 'itemsubstitution',
+                        fieldId: 'custitem_substitute_type',
+                        line: i,
+                        value: formValue
+                    });
+                    log.debug({
+                        title: 'Saving Substitute Type',
+                        details: 'Set custitem_substitute_type to: ' + formValue + ' on line ' + (i + 1)
+                    });
+                } else {
+                    throw new Error('Substitute Type is required on line ' + (i + 1) + '.');
+                }
             }
         }
     }
