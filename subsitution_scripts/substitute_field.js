@@ -3,7 +3,7 @@
  * @NScriptType UserEventScript
  * @NModuleScope SameAccount
  */
-define(['N/record', 'N/ui/serverWidget'], function(record, serverWidget) {
+define(['N/record', 'N/ui/serverWidget'], function (record, serverWidget) {
     function beforeLoad(context) {
         if (context.type === context.UserEventType.CREATE || context.type === context.UserEventType.EDIT) {
             var form = context.form;
@@ -14,20 +14,7 @@ define(['N/record', 'N/ui/serverWidget'], function(record, serverWidget) {
                 id: 'custrecord_substitute_type',
                 type: serverWidget.FieldType.SELECT,
                 label: 'Substitute Type',
-                source: null
-            });
-            
-            substituteTypeField.addSelectOption({
-                value: '',
-                text: ''
-            });
-            substituteTypeField.addSelectOption({
-                value: 'SUPERSEDED',
-                text: 'Superseded'
-            });
-            substituteTypeField.addSelectOption({
-                value: 'REPLACEMENT',
-                text: 'Replacement'
+                source: 'customlist_substitute_type' // Reference the custom list
             });
 
             substituteTypeField.isMandatory = true;
@@ -38,7 +25,7 @@ define(['N/record', 'N/ui/serverWidget'], function(record, serverWidget) {
         if (context.type === context.UserEventType.CREATE || context.type === context.UserEventType.EDIT) {
             var substituteRecord = context.newRecord;
             var substituteType = substituteRecord.getValue('custrecord_substitute_type');
-            
+
             if (!substituteType) {
                 throw new Error('Substitute Type is required.');
             }
