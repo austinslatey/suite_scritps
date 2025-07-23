@@ -1,72 +1,72 @@
-define(['N/currentRecord', 'N/search', 'N/ui/dialog'], function(currentRecord, search, dialog) {
+/**
+ * @NApiVersion 2.x
+ * @NScriptType ClientScript
+ * @NModuleScope SameAccount
+ */
+define(['N/record', 'N/ui/dialog', 'N/search'], function(record, dialog, search) {
+    function validateLine(context) {
+        var salesOrder = context.currentRecord;
+        var sublistId = context.sublistId;
+        
+        if (sublistId === 'item') {
+            var itemId = salesOrder.getCurrentSublistValue({
+                sublistId: 'item',
+                fieldId: 'item'
+            });
 
-    function fieldChanged(context) {
-        if (context.sublistId === 'item' && context.fieldId === 'item') {
-            var rec = currentRecord.get();
-            var itemId = rec.getCurrentSublistValue({ sublistId: 'item', fieldId: 'item' });
+            // Search for substitute items
+            var substituteSearch = search.create({
+                type: 'itemsubstitute',
+                filters: [
+                    ['item', 'is', itemId],
+                    'AND',
+                    ['isinactive', 'is', false]
+                ],
+                columns: [
+                    'substituteitem',
+                    'custrecord_substitute_type'
+                ]
+            });
 
-            // Run a saved search or load substitute dynamically
-            var substituteData = getSubstitute(itemId);
+            var searchResult = substituteSearch.run().getRange({start: 0, end: 1});
             
-            if (!substituteData) return;
+            if (searchResult.length > 0) {
+                var substituteItemId = searchResult[0].getValue('substituteitem');
+                var substituteType = searchResult[0].getValue('custrecord_substitute_type');
+                var substituteItemName = searchResult[0].getText('substituteitem');
 
-            var { substituteId, substituteName, type } = substituteData;
-
-            if (type === 'Superceded') {
-                dialog.alert({
-                    title: 'Item Superceded',
-                    message: `The part "${substituteName}" superceeds this part and is being replaced inside the order.`
-                }).then(function () {
-                    replaceItem(rec, substituteId);
-                });
-
-            } else if (type === 'Replacement') {
-                dialog.confirm({
-                    title: 'Replace Item?',
-                    message: `The part "${substituteName}" can replace this part. Would you like to replace it?`
-                }).then(function (yes) {
-                    if (yes) {
-                        replaceItem(rec, substituteId);
-                    }
-                });
+                if (substituteType === 'SUPERSEDED') {
+                    dialog.alert({
+                        title: 'Superseded Item',
+                        message: 'The part "' + substituteItemName + '" supercedes this part and is being replaced inside the sales order.'
+                    }).then(function() {
+                        // Automatically replace with superseded item
+                        salesOrder.setCurrentSublistValue({
+                            sublistId: 'item',
+                            fieldId: 'item',
+                            value: substituteItemId
+                        });
+                    });
+                } else if (substituteType === 'REPLACEMENT') {
+                    dialog.confirm({
+                        title: 'Replacement Item Available',
+                        message: 'The part "' + substituteItemName + '" can replace this part. Would you like to replace it?'
+                    }).then(function(confirmed) {
+                        if (confirmed) {
+                            salesOrder.setCurrentSublistValue({
+                                sublistId: 'item',
+                                fieldId: 'item',
+                                value: substituteItemId
+                            });
+                        }
+                    });
+                }
             }
         }
-    }
-
-    function replaceItem(rec, substituteId) {
-        rec.setCurrentSublistValue({ sublistId: 'item', fieldId: 'item', value: substituteId });
-        rec.setCurrentSublistValue({ sublistId: 'item', fieldId: 'description', value: '' });
-        rec.setCurrentSublistValue({ sublistId: 'item', fieldId: 'rate', value: '' });
-        rec.setCurrentSublistValue({ sublistId: 'item', fieldId: 'custitemcustom_mpn', value: '' });
-    }
-
-    function getSubstitute(itemId) {
-        // This would likely be a saved search filtering on the "Substitute Items" sublist of the item
-        var itemSearch = search.create({
-            type: search.Type.ITEM,
-            filters: [['internalid', 'is', itemId]],
-            columns: [
-                search.createColumn({ name: 'internalid' }),
-                search.createColumn({ name: 'subitem', join: 'substituteItem' }),
-                search.createColumn({ name: 'custrecord_sub_type', join: 'substituteItem' }),
-                search.createColumn({ name: 'itemid', join: 'substituteItem' })
-            ]
-        });
-
-        var results = itemSearch.run().getRange({ start: 0, end: 1 });
-        if (results.length) {
-            var result = results[0];
-            return {
-                substituteId: result.getValue({ name: 'subitem', join: 'substituteItem' }),
-                substituteName: result.getText({ name: 'itemid', join: 'substituteItem' }),
-                type: result.getText({ name: 'custrecord_sub_type', join: 'substituteItem' })
-            };
-        }
-
-        return null;
+        return true;
     }
 
     return {
-        fieldChanged: fieldChanged
+        validateLine: validateLine
     };
 });
