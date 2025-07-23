@@ -3,11 +3,11 @@
  * @NScriptType ClientScript
  * @NModuleScope SameAccount
  */
-define(['N/record', 'N/ui/dialog', 'N/search'], function(record, dialog, search) {
+define(['N/record', 'N/ui/dialog', 'N/search'], function (record, dialog, search) {
     function validateLine(context) {
         var salesOrder = context.currentRecord;
         var sublistId = context.sublistId;
-        
+
         if (sublistId === 'item') {
             var itemId = salesOrder.getCurrentSublistValue({
                 sublistId: 'item',
@@ -28,8 +28,8 @@ define(['N/record', 'N/ui/dialog', 'N/search'], function(record, dialog, search)
                 ]
             });
 
-            var searchResult = substituteSearch.run().getRange({start: 0, end: 1});
-            
+            var searchResult = substituteSearch.run().getRange({ start: 0, end: 1 });
+
             if (searchResult.length > 0) {
                 var substituteItemId = searchResult[0].getValue('substituteitem');
                 var substituteType = searchResult[0].getValue('custrecord_substitute_type');
@@ -38,8 +38,8 @@ define(['N/record', 'N/ui/dialog', 'N/search'], function(record, dialog, search)
                 if (substituteType === 'SUPERSEDED') {
                     dialog.alert({
                         title: 'Superseded Item',
-                        message: 'The part "' + substituteItemName + '" supercedes this part and is being replaced inside the sales order.'
-                    }).then(function() {
+                        message: 'The part "' + substituteItemName + '" supersedes this part and is being replaced inside the sales order.'
+                    }).then(function () {
                         // Automatically replace with superseded item
                         salesOrder.setCurrentSublistValue({
                             sublistId: 'item',
@@ -51,7 +51,7 @@ define(['N/record', 'N/ui/dialog', 'N/search'], function(record, dialog, search)
                     dialog.confirm({
                         title: 'Replacement Item Available',
                         message: 'The part "' + substituteItemName + '" can replace this part. Would you like to replace it?'
-                    }).then(function(confirmed) {
+                    }).then(function (confirmed) {
                         if (confirmed) {
                             salesOrder.setCurrentSublistValue({
                                 sublistId: 'item',
