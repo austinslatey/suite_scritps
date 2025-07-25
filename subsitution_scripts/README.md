@@ -73,6 +73,25 @@ One script was developed to address the requirements:
   - For `REPLACEMENT`, confirm or decline replacement based on the original item's stock levels.
   - Verify the line updates with the new item's Description, Rate, MPN, On Hand, and Available.
 
+
+## Assets
+The following screenshots illustrate the user experience and setup:
+
+- **Inventory Item Display** (`inventoryItemDisplay.jpg`): Illustrates the Sales Order line after replacement, showing updated fields (Item, Description, Rate, MPN, On Hand, Available).  
+![Inventory Item Display](./assets/inventoryItemDisplay.jpg)
+
+- **Substitute Type Field** (`substituteType.jpg`): Shows the mandatory `Substitute Type` field on the Item Substitute subtab, with options `SUPERSEDED` and `REPLACEMENT`.  
+  ![Substitute Type Field](./assets/substituteType.jpg)
+
+
+
+- **Superseded Alert** (`superseded.jpg`): Displays the alert shown when a `SUPERSEDED` substitute is detected, e.g., "The part '30804' (2 PANEL 190W EA. SOLAR KIT) supersedes this part and will be replaced in the sales order."
+- **Replacement Prompt** (`replacement.jpg`): Shows the confirmation dialog for a `REPLACEMENT` substitute, including the original item's stock levels, e.g., "The part '30804' can replace this part. The current item has 0 on hand and 0 available. Would you like to replace it?"    
+![Superseded Alert](./assets/superseded.jpg)
+![Replacement Prompt](./assets/replacement.jpg)
+
+
+
 ## Future Development
 - **Multiple Substitutes**: Enhance `Substitute.js` to handle cases where an item has multiple replacement parts. Display a dialog listing all options (Initial Part, Replacement Part 1, Replacement Part 2, etc.) and allow the user to select one.
 - **Advanced Inventory Checks**: Add checks for substitute item stock levels in the `REPLACEMENT` prompt to aid decision-making.
