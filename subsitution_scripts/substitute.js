@@ -25,40 +25,72 @@ define(['N/record', 'N/ui/dialog', 'N/search'], function (record, dialog, search
             });
             console.log('Current itemId:', itemId);
 
+            // Get sales order location if set
+            var locationId = salesOrder.getValue({ fieldId: 'location' });
+            console.log('Sales Order Location ID:', locationId);
+
+            // Search for initial item's inventory details
+            var inventoryFilters = [
+                ['internalid', 'is', itemId],
+                'AND',
+                ['isinactive', 'is', false]
+            ];
+            if (locationId) {
+                inventoryFilters.push('AND');
+                inventoryFilters.push(['location', 'is', locationId]);
+            }
+
+            var inventorySearch = search.create({
+                type: search.Type.INVENTORY_ITEM,
+                filters: inventoryFilters,
+                columns: [
+                    search.createColumn({ name: 'quantityonhand', label: 'On Hand' }),
+                    search.createColumn({ name: 'quantityavailable', label: 'Available' })
+                ]
+            });
+
+            console.log('Running inventory search');
+            var inventoryResult = inventorySearch.run().getRange({ start: 0, end: 1 });
+            console.log('Inventory search results:', inventoryResult);
+
+            var onHand = inventoryResult.length > 0 ? inventoryResult[0].getValue('quantityonhand') || '0' : '0';
+            var available = inventoryResult.length > 0 ? inventoryResult[0].getValue('quantityavailable') || '0' : '0';
+            console.log('Initial Item On Hand:', onHand, 'Available:', available);
+
             // Search for substitute items
             console.log('Creating substitute search');
             var substituteSearch = search.create({
-                type: 'customrecord_scm_item_substitute', // Use the confirmed type
+                type: 'customrecord_scm_item_substitute',
                 filters: [
-                    ['custrecord_scm_itemsub_parent', 'is', itemId], // Parent field ID
+                    ['custrecord_scm_itemsub_parent', 'is', itemId],
                     'AND',
                     ['isinactive', 'is', false]
                 ],
                 columns: [
-                    search.createColumn({ name: 'custrecord_scm_itemsub_substitute' }), // Substitute item field
-                    search.createColumn({ name: 'custrecord_substitute_type1' }), // Substitute type field
+                    search.createColumn({ name: 'custrecord_scm_itemsub_substitute' }),
+                    search.createColumn({ name: 'custrecord_substitute_type1' }),
                     search.createColumn({
                         name: 'formulatext',
-                        formula: '{custrecord_scm_itemsub_substitute.itemid}', // Formula for item number
+                        formula: '{custrecord_scm_itemsub_substitute.itemid}',
                         label: 'Substitute Item Number'
                     }),
                     search.createColumn({
                         name: 'formulatext2',
-                        formula: '{custrecord_scm_itemsub_substitute.salesdescription}', // Formula for sales description
+                        formula: '{custrecord_scm_itemsub_substitute.salesdescription}',
                         label: 'Sales Description'
                     })
                 ]
             });
 
-            console.log('Running search');
+            console.log('Running substitute search');
             var searchResult = substituteSearch.run().getRange({ start: 0, end: 1 });
             console.log('Search results:', searchResult);
 
             if (searchResult.length > 0) {
                 var substituteItemId = searchResult[0].getValue('custrecord_scm_itemsub_substitute');
                 var substituteType = searchResult[0].getText('custrecord_substitute_type1');
-                var substituteItemName = searchResult[0].getValue('formulatext'); // Item number
-                var salesDescription = searchResult[0].getValue('formulatext2'); // Sales description
+                var substituteItemName = searchResult[0].getValue('formulatext');
+                var salesDescription = searchResult[0].getValue('formulatext2');
 
                 console.log('Substitute Item ID:', substituteItemId);
                 console.log('Substitute Type:', substituteType);
@@ -75,7 +107,8 @@ define(['N/record', 'N/ui/dialog', 'N/search'], function (record, dialog, search
                     replace = true;
                 } else if (substituteType === 'REPLACEMENT') {
                     console.log('Handling REPLACEMENT type');
-                    var confirmed = window.confirm('The part "' + substituteItemName + '" (' + salesDescription + ') can replace this part. Would you like to replace it?');
+                    var stockMessage = 'The part "' + substituteItemName + '" can replace this part. The current item has ' + onHand + ' on hand and ' + available + ' available. Would you like to replace it?';
+                    var confirmed = window.confirm(stockMessage);
                     if (confirmed) {
                         replace = true;
                     } else {
@@ -91,24 +124,33 @@ define(['N/record', 'N/ui/dialog', 'N/search'], function (record, dialog, search
                         value: substituteItemId
                     });
 
+                    // Clear fields to force re-sourcing
                     salesOrder.setCurrentSublistValue({
                         sublistId: 'item',
                         fieldId: 'description',
                         value: ''
                     });
-
                     salesOrder.setCurrentSublistValue({
                         sublistId: 'item',
                         fieldId: 'rate',
                         value: ''
                     });
-
                     salesOrder.setCurrentSublistValue({
                         sublistId: 'item',
-                        fieldId: 'custitemcustom_mpn',
+                        fieldId: 'custitemcustom_mpn', // Adjust to 'custcol_custom_mpn' if it's a line field
                         value: ''
                     });
 
+                    // Reset quantity to trigger inventory field updates
+                    var qty = salesOrder.getCurrentSublistValue({
+                        sublistId: 'item',
+                        fieldId: 'quantity'
+                    }) || 1;
+                    salesOrder.setCurrentSublistValue({
+                        sublistId: 'item',
+                        fieldId: 'quantity',
+                        value: qty
+                    });
                 }
 
                 isReplacing = false; // Reset flag after replacement
