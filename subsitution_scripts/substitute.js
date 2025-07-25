@@ -68,7 +68,7 @@ define(['N/record', 'N/ui/dialog', 'N/search'], function (record, dialog, search
                 ],
                 columns: [
                     search.createColumn({ name: 'custrecord_scm_itemsub_substitute' }),
-                    search.createColumn({ name: 'custrecord_substitute_type1' }),
+                    search.createColumn({ name: 'Custrecordcustrecord_substitute_type1' }),
                     search.createColumn({
                         name: 'formulatext',
                         formula: '{custrecord_scm_itemsub_substitute.itemid}',
@@ -88,7 +88,7 @@ define(['N/record', 'N/ui/dialog', 'N/search'], function (record, dialog, search
 
             if (searchResult.length > 0) {
                 var substituteItemId = searchResult[0].getValue('custrecord_scm_itemsub_substitute');
-                var substituteType = searchResult[0].getText('custrecord_substitute_type1');
+                var substituteType = searchResult[0].getText('Custrecordcustrecord_substitute_type1');
                 var substituteItemName = searchResult[0].getValue('formulatext');
                 var salesDescription = searchResult[0].getValue('formulatext2');
 
@@ -101,11 +101,11 @@ define(['N/record', 'N/ui/dialog', 'N/search'], function (record, dialog, search
 
                 isReplacing = true; // Set flag before replacement
 
-                if (substituteType === 'SUPERSEDED') {
+                if (substituteType === 'Superseded') {
                     console.log('Handling SUPERSEDED type');
                     window.alert('The part "' + substituteItemName + '" (' + salesDescription + ') supersedes this part and will be replaced in the sales order.');
                     replace = true;
-                } else if (substituteType === 'REPLACEMENT') {
+                } else if (substituteType === 'Replacement') {
                     console.log('Handling REPLACEMENT type');
                     var stockMessage = 'The part "' + substituteItemName + '" can replace this part. The current item has ' + onHand + ' on hand and ' + available + ' available. Would you like to replace it?';
                     var confirmed = window.confirm(stockMessage);
