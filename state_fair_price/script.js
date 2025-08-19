@@ -1,27 +1,50 @@
 /**
  * @NApiVersion 2.1
- * @NScriptType UserEventScript
+ * @NScriptType ClientScript
  * @NModuleScope SameAccount
  */
 
-define(['N/record', 'N/log'], (record, log) => {
+define(['N/currentRecord', 'N/log'], (currentRecord, log) => {
 
-    const beforeSubmit = (context) => {
+    const pageInit = (context) => {
         try {
-            if (context.type !== context.UserEventType.CREATE && context.type !== context.UserEventType.EDIT) {
-                log.debug({
-                    title: 'Script Skipped',
-                    details: `Event type ${context.type} is not CREATE or EDIT`
-                });
-                return;
-            }
-
-            const rec = context.newRecord;
+            const rec = context.currentRecord;
             log.debug({
-                title: 'Processing Record',
+                title: 'Client Script: pageInit',
                 details: `Record Type: ${rec.type}, ID: ${rec.id}`
             });
+            updateStateFairPrice(rec);
+        } catch (e) {
+            log.error({
+                title: 'pageInit Error',
+                details: `Error: ${e.message}, Stack: ${e.stack}`
+            });
+        }
+    };
 
+    const fieldChanged = (context) => {
+        try {
+            const rec = context.currentRecord;
+            const fieldId = context.fieldId;
+            log.debug({
+                title: 'Client Script: fieldChanged',
+                details: `Field Changed: ${fieldId}`
+            });
+
+            // Trigger on changes to pricing-related fields
+            if (fieldId === 'pricingMatrix' || fieldId.includes('price')) {
+                updateStateFairPrice(rec);
+            }
+        } catch (e) {
+            log.error({
+                title: 'fieldChanged Error',
+                details: `Error: ${e.message}, Stack: ${e.stack}`
+            });
+        }
+    };
+
+    const updateStateFairPrice = (rec) => {
+        try {
             // Access the pricing matrix
             const pricingMatrix = rec.getValue({ fieldId: 'pricingMatrix' });
             log.debug({
@@ -37,9 +60,9 @@ define(['N/record', 'N/log'], (record, log) => {
                 return;
             }
 
-            // Find the State Fair price (priceList ID 8)
+            // Find the State Fair price (priceLevel ID 8)
             const stateFairPrice = pricingMatrix.pricing.priceList.find(price => price.priceLevel === '8');
-            
+
             if (stateFairPrice && stateFairPrice.price && stateFairPrice.price.value) {
                 const priceValue = stateFairPrice.price.value;
                 log.debug({
@@ -65,11 +88,14 @@ define(['N/record', 'N/log'], (record, log) => {
             }
         } catch (e) {
             log.error({
-                title: 'Script Error',
+                title: 'updateStateFairPrice Error',
                 details: `Error: ${e.message}, Stack: ${e.stack}`
             });
         }
     };
 
-    return { beforeSubmit };
+    return {
+        pageInit,
+        fieldChanged
+    };
 });
