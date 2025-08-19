@@ -1,31 +1,43 @@
 /**
- * @NApiVersion 1.0
+ * @NApiVersion 2.1
  * @NScriptType UserEventScript
  * @NModuleScope SameAccount
- *
- * Copies Price Level 8 (State Fair) into top-level field custitem_state_fair_price
  */
 
-function copyStateFairPrice(type) {
-    if (type !== 'create' && type !== 'edit') return;
+define(['N/record'], (record) => {
 
-    // Get the current record
-    var rec = nlapiGetNewRecord();
-
-    // Get total price lines
-    var lineCount = rec.getLineItemCount('price');
-
-    // Loop through price matrix
-    for (var i = 1; i <= lineCount; i++) {
-        var priceLevelId = rec.getLineItemValue('price', 'pricelevel', i);
-
-        // Check for Price Level 8 (State Fair)
-        if (priceLevelId == '8') {
-            var priceValue = rec.getLineItemValue('price', 'price', i);
-
-            // Set top-level custom field
-            rec.setFieldValue('custitem_state_fair_price', priceValue);
-            break; // stop after first match
+    const beforeSubmit = (context) => {
+        if (context.type !== context.UserEventType.CREATE &&
+            context.type !== context.UserEventType.EDIT) {
+            return;
         }
-    }
-}
+
+        const rec = context.newRecord;
+        const lineCount = rec.getLineCount({ sublistId: 'price' });
+
+        for (let i = 0; i < lineCount; i++) {
+            const priceLevelId = rec.getSublistValue({
+                sublistId: 'price',
+                fieldId: 'pricelevel',
+                line: i
+            });
+
+            if (priceLevelId == 8) { // State Fair Price Level
+                const priceValue = rec.getSublistValue({
+                    sublistId: 'price',
+                    fieldId: 'price',
+                    line: i
+                });
+
+                rec.setValue({
+                    fieldId: 'custitem_state_fair_price',
+                    value: priceValue
+                });
+
+                break; // stop after first match
+            }
+        }
+    };
+
+    return { beforeSubmit };
+});
