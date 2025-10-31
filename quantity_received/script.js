@@ -10,10 +10,10 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                 log.debug('Scheduled Script Start', `Triggered at ${new Date().toISOString()}`);
 
                 // ---------- CONFIG ----------
-                const startDate = '10/01/2025'; // change as needed, MM/DD/YYYY
-                const maxResults = 100;         // max IRs to process per run
+                const startDate = '10/01/2025'; // MM/DD/YYYY
+                const maxResults = 100;         // max IRs per run
 
-                // ---------- SEARCH ---------- 
+                // ---------- SEARCH ITEM RECEIPTS ----------
                 const irSearch = search.create({
                     type: record.Type.ITEM_RECEIPT,
                     filters: [['trandate', 'onorafter', startDate]],
@@ -21,7 +21,6 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                 });
 
                 const results = irSearch.run().getRange({ start: 0, end: maxResults });
-
                 if (!results || results.length === 0) {
                     log.debug('Scheduled Script', 'No Item Receipts found for processing.');
                     return;
@@ -34,15 +33,14 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                         const poId = result.getValue('createdfrom');
 
                         log.debug('Processing IR Start', `IR ID: ${irId}, PO: ${poId}`);
+                        if (!poId) return;
 
-                        if (!poId) return; // skip IRs not linked to a PO
-
-                        // Load IR dynamically
+                        // Load IR
                         const ir = record.load({ type: record.Type.ITEM_RECEIPT, id: irId, isDynamic: false });
                         const lineCount = ir.getLineCount({ sublistId: 'item' });
                         const newReceivedLines = [];
 
-                        // ---------- LOOP LINES ----------
+                        // ---------- LOOP IR LINES ----------
                         for (let i = 0; i < lineCount; i++) {
                             const qtyReceived = ir.getSublistValue({ sublistId: 'item', fieldId: 'quantity', line: i });
                             const notifSent = ir.getSublistValue({ sublistId: 'item', fieldId: 'custcol_ir_notif_sent', line: i });
@@ -53,28 +51,30 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                             }
                         }
 
-                        if (newReceivedLines.length === 0) return; // nothing new to notify
+                        if (newReceivedLines.length === 0) return;
 
                         // ---------- LOAD PO ----------
                         const po = record.load({ type: record.Type.PURCHASE_ORDER, id: poId });
                         const poNum = po.getValue('tranid');
-                        const employeeId = po.getValue('employee');
+                        const employeeId = po.getValue('employee'); // internal ID
 
-                        // ---------- FIND EMPLOYEE EMAIL ----------
-                        let recipientEmail = null;
-
-                        if (employeeId) {
-                            try {
-                                const empRec = record.load({ type: record.Type.EMPLOYEE, id: employeeId });
-                                recipientEmail = empRec.getValue('email');
-                                log.debug('Employee Email Found', `${recipientEmail} (Employee ID: ${employeeId})`);
-                            } catch (empErr) {
-                                log.error('Employee Load Failed', empErr);
-                            }
+                        if (!employeeId) {
+                            log.audit('No Employee on PO', `PO ${poNum} has no employee assigned`);
+                            return;
                         }
 
-                        if (!recipientEmail) {
-                            log.audit('No Recipients Found', `IR ${irId} → PO ${poNum} (No employee email found)`);
+                        // ---------- LOAD EMPLOYEE ----------
+                        let recipientEmail = null;
+                        try {
+                            const empRec = record.load({ type: record.Type.EMPLOYEE, id: employeeId });
+                            recipientEmail = empRec.getValue('email');
+                            if (!recipientEmail) {
+                                log.audit('No Email Found', `Employee ID ${employeeId} has no email`);
+                                return;
+                            }
+                            log.debug('Employee Email Found', `${recipientEmail} (Employee ID: ${employeeId})`);
+                        } catch (empErr) {
+                            log.error('Employee Load Failed', empErr);
                             return;
                         }
 
@@ -85,17 +85,14 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                         });
                         body += `</ul><p><a href="https://3461249-sb1.app.netsuite.com/app/accounting/transactions/purchord.nl?id=${poId}">View PO</a></p>`;
 
-                        // ---------- DEBUG / SEND EMAIL ----------
-                        log.audit('Would send email', `IR ${irId} → PO ${poNum} → Recipient: ${recipientEmail}`);
-
-                        // Uncomment below to actually send
+                        // ---------- SEND EMAIL ----------
+                        log.audit('Sending Email', `IR ${irId} → PO ${poNum} → Recipient: ${recipientEmail}`);
                         email.send({
-                            author: runtime.getCurrentUser().id,
+                            author: employeeId, // MUST be internal ID of employee
                             recipients: recipientEmail,
                             subject: `Item(s) Received for Purchase Order ${poNum}`,
                             body: body
                         });
-
 
                         // ---------- MARK LINES AS NOTIFIED ----------
                         newReceivedLines.forEach(line => {
