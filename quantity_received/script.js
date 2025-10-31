@@ -38,7 +38,7 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                         if (!poId) return; // skip IRs not linked to a PO
 
                         // Load IR dynamically
-                        const ir = record.load({ type: record.Type.ITEM_RECEIPT, id: irId, isDynamic: true });
+                        const ir = record.load({ type: record.Type.ITEM_RECEIPT, id: irId, isDynamic: false });
                         const lineCount = ir.getLineCount({ sublistId: 'item' });
                         const newReceivedLines = [];
 
@@ -89,14 +89,13 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                         log.audit('Would send email', `IR ${irId} → PO ${poNum} → Recipient: ${recipientEmail}`);
 
                         // Uncomment below to actually send
-                        /*
                         email.send({
                             author: runtime.getCurrentUser().id,
                             recipients: recipientEmail,
                             subject: `Item(s) Received for Purchase Order ${poNum}`,
                             body: body
                         });
-                        */
+
 
                         // ---------- MARK LINES AS NOTIFIED ----------
                         newReceivedLines.forEach(line => {
