@@ -88,36 +88,80 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
 
                         const soNum = soData.tranid;
 
-                        // ---------- GET SALES REP (EMPLOYEE) ID ----------
-                        let employeeId = null;
+                        // ---------- GET SALES REP ID ----------
+                        let salesRepId = null;
                         if (soData.salesrep && soData.salesrep.length > 0) {
-                            employeeId = soData.salesrep[0].value;
+                            salesRepId = soData.salesrep[0].value;
+                            log.debug('Sales Rep Found', `SO ${soNum} - Sales Rep ID: ${salesRepId}`);
+                        } else {
+                            log.debug('No Sales Rep', `SO ${soNum} has no sales rep assigned`);
                         }
 
-                        if (!employeeId) {
-                            log.audit('No Sales Rep Found', `SO ${soNum} has no sales rep assigned`);
+                        // ---------- FIND WHO CREATED THE SO (SYSTEM NOTES) ----------
+                        let creatorId = null;
+                        try {
+                            const systemNotesSearch = search.create({
+                                type: search.Type.SYSTEM_NOTE,
+                                filters: [
+                                    ['recordid', 'anyof', soId],
+                                    'AND',
+                                    ['type', 'is', 'Create'],
+                                    'AND',
+                                    ['field', 'is', 'RECORD']
+                                ],
+                                columns: [
+                                    search.createColumn({ name: 'name', sort: search.Sort.ASC }),
+                                    search.createColumn({ name: 'date' })
+                                ]
+                            });
+
+                            const systemNoteResults = systemNotesSearch.run().getRange({ start: 0, end: 1 });
+
+                            if (systemNoteResults && systemNoteResults.length > 0) {
+                                creatorId = systemNoteResults[0].getValue('name');
+                                log.debug('SO Creator Found', `SO ${soNum} created by Employee ID: ${creatorId}`);
+                            } else {
+                                log.debug('No Creator Found', `SO ${soNum} has no system note for creation`);
+                            }
+                        } catch (sysNoteErr) {
+                            log.error('System Note Search Failed', `soId: ${soId}, Error: ${sysNoteErr.message}`);
+                        }
+
+                        // ---------- COLLECT UNIQUE RECIPIENTS ----------
+                        const recipientIds = new Set(); // Use Set to avoid duplicates
+                        if (salesRepId) recipientIds.add(salesRepId);
+                        if (creatorId) recipientIds.add(creatorId);
+
+                        if (recipientIds.size === 0) {
+                            log.audit('No Recipients', `SO ${soNum} has no sales rep or creator to notify`);
                             return;
                         }
 
-                        log.debug('Sales Rep ID Found', `Employee ID: ${employeeId}`);
+                        log.debug('Recipients to Notify', `Employee IDs: ${Array.from(recipientIds).join(', ')}`);
 
-                        // ---------- GET EMPLOYEE EMAIL ----------
-                        let recipientEmail = null;
-                        try {
-                            const empData = search.lookupFields({
-                                type: search.Type.EMPLOYEE,
-                                id: employeeId,
-                                columns: ['email']
-                            });
-                            recipientEmail = empData.email;
+                        // ---------- GET EMAIL ADDRESSES FOR ALL RECIPIENTS ----------
+                        const recipientEmails = [];
+                        for (const empId of recipientIds) {
+                            try {
+                                const empData = search.lookupFields({
+                                    type: search.Type.EMPLOYEE,
+                                    id: empId,
+                                    columns: ['email', 'entityid']
+                                });
 
-                            if (!recipientEmail) {
-                                log.audit('No Email Found', `Employee ID ${employeeId} has no email`);
-                                return;
+                                if (empData.email) {
+                                    recipientEmails.push(empData.email);
+                                    log.debug('Email Found', `Employee ID ${empId} (${empData.entityid}): ${empData.email}`);
+                                } else {
+                                    log.audit('No Email', `Employee ID ${empId} has no email address`);
+                                }
+                            } catch (empErr) {
+                                log.error('Employee Lookup Failed', `Employee ID ${empId}: ${empErr.message}`);
                             }
-                            log.debug('Employee Email Found', `${recipientEmail} (Employee ID: ${employeeId})`);
-                        } catch (empErr) {
-                            log.error('Employee Lookup Failed', empErr.message);
+                        }
+
+                        if (recipientEmails.length === 0) {
+                            log.audit('No Email Addresses', `No valid email addresses found for SO ${soNum} recipients`);
                             return;
                         }
 
@@ -129,10 +173,14 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                         body += `</ul><p><a href="https://3461249-sb1.app.netsuite.com/app/accounting/transactions/salesord.nl?id=${soId}">View Sales Order</a> | <a href="https://3461249-sb1.app.netsuite.com/app/accounting/transactions/purchord.nl?id=${poId}">View Purchase Order</a></p>`;
 
                         // ---------- SEND EMAIL ----------
-                        log.audit('Sending Email', `IR ${irId} → PO ${poNum} → SO ${soNum} → Recipient: ${recipientEmail}`);
+                        // Use the first recipient ID as the author
+                        const authorId = Array.from(recipientIds)[0];
+                        const recipientList = recipientEmails.join(', ');
+
+                        log.audit('Sending Email', `IR ${irId} → PO ${poNum} → SO ${soNum} → Recipients: ${recipientList}`);
                         email.send({
-                            author: employeeId,
-                            recipients: recipientEmail,
+                            author: authorId,
+                            recipients: recipientEmails,
                             subject: `Item(s) Received for Sales Order ${soNum}`,
                             body: body
                         });
@@ -148,7 +196,7 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                         });
 
                         ir.save();
-                        log.debug('IR Processed', `IR ${irId} processed successfully. Lines notified: ${newReceivedLines.length}`);
+                        log.debug('IR Processed', `IR ${irId} processed successfully. Lines notified: ${newReceivedLines.length}. Emails sent to: ${recipientList}`);
 
                     } catch (irError) {
                         log.error(`IR Processing Error ${result.getValue('internalid')}`, irError.message || irError);
