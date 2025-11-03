@@ -100,6 +100,8 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                         // ---------- FIND WHO CREATED THE SO (SYSTEM NOTES) ----------
                         let creatorId = null;
                         try {
+                            log.debug('System Notes Search', `Searching for creation of SO ID: ${soId}`);
+
                             const systemNotesSearch = search.create({
                                 type: search.Type.SYSTEM_NOTE,
                                 filters: [
@@ -110,18 +112,42 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                                     ['field', 'is', 'RECORD']
                                 ],
                                 columns: [
-                                    search.createColumn({ name: 'name', sort: search.Sort.ASC }),
-                                    search.createColumn({ name: 'date' })
+                                    search.createColumn({ name: 'name' }),
+                                    search.createColumn({ name: 'date', sort: search.Sort.DESC }),
+                                    search.createColumn({ name: 'field' }),
+                                    search.createColumn({ name: 'type' }),
+                                    search.createColumn({ name: 'record' }),
+                                    search.createColumn({ name: 'recordid' })
                                 ]
                             });
 
                             const systemNoteResults = systemNotesSearch.run().getRange({ start: 0, end: 1 });
 
+                            log.debug('System Notes Results', `Found ${systemNoteResults ? systemNoteResults.length : 0} system notes with field=RECORD`);
+
                             if (systemNoteResults && systemNoteResults.length > 0) {
-                                creatorId = systemNoteResults[0].getValue('name');
-                                log.debug('SO Creator Found', `SO ${soNum} created by Employee ID: ${creatorId}`);
+                                const note = systemNoteResults[0];
+                                const noteData = {
+                                    name: note.getValue('name'),
+                                    nameText: note.getText('name'),
+                                    field: note.getValue('field'),
+                                    type: note.getValue('type'),
+                                    date: note.getValue('date'),
+                                    record: note.getValue('record'),
+                                    recordid: note.getValue('recordid')
+                                };
+                                log.debug('System Note Details', JSON.stringify(noteData));
+
+                                // The 'name' field contains the employee ID
+                                creatorId = note.getValue('name');
+
+                                if (creatorId) {
+                                    log.debug('SO Creator Found', `SO ${soNum} created by Employee ID: ${creatorId}`);
+                                } else {
+                                    log.debug('No Creator ID', 'name field was empty');
+                                }
                             } else {
-                                log.debug('No Creator Found', `SO ${soNum} has no system note for creation`);
+                                log.debug('No System Notes Found', `SO ${soNum} has no system note with type=Create and field=RECORD`);
                             }
                         } catch (sysNoteErr) {
                             log.error('System Note Search Failed', `soId: ${soId}, Error: ${sysNoteErr.message}`);
