@@ -5,16 +5,17 @@
 define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
     (record, search, email, runtime, log) => {
 
-        const execute = () => {
+        const execute = (context) => {
             try {
                 log.debug('Scheduled Script Start', `Triggered at ${new Date().toISOString()}`);
 
-                const startDate = '10/01/2025';
-                const maxResults = 100;
+                // ---------- CONFIG ----------
+                const startDate = '10/01/2025'; // MM/DD/YYYY
+                const maxResults = 100;         // max IRs per run
 
                 // ---------- SEARCH ITEM RECEIPTS ----------
                 const irSearch = search.create({
-                    type: record.Type.ITEM_RECEIPT,
+                    type: search.Type.ITEM_RECEIPT,
                     filters: [['trandate', 'onorafter', startDate]],
                     columns: ['internalid', 'createdfrom']
                 });
@@ -25,20 +26,21 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                     return;
                 }
 
-                // ---------- PROCESS EACH ITEM RECEIPT ----------
+                // ---------- PROCESS EACH IR ----------
                 results.forEach(result => {
                     try {
                         const irId = result.getValue('internalid');
                         const poId = result.getValue('createdfrom');
 
+                        log.debug('Processing IR Start', `IR ID: ${irId}, PO: ${poId}`);
                         if (!poId) return;
 
-                        log.debug('Processing IR Start', `IR ID: ${irId}, PO: ${poId}`);
-
+                        // Load IR
                         const ir = record.load({ type: record.Type.ITEM_RECEIPT, id: irId, isDynamic: false });
                         const lineCount = ir.getLineCount({ sublistId: 'item' });
                         const newReceivedLines = [];
 
+                        // ---------- LOOP IR LINES ----------
                         for (let i = 0; i < lineCount; i++) {
                             const qtyReceived = ir.getSublistValue({ sublistId: 'item', fieldId: 'quantity', line: i });
                             const notifSent = ir.getSublistValue({ sublistId: 'item', fieldId: 'custcol_ir_notif_sent', line: i });
@@ -51,55 +53,85 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
 
                         if (newReceivedLines.length === 0) return;
 
-                        // ---------- LOAD PURCHASE ORDER ----------
+                        // ---------- LOAD PO ----------
                         const po = record.load({ type: record.Type.PURCHASE_ORDER, id: poId });
-                        const soId = po.getValue('createdfrom'); // ← this links back to the Sales Order
+                        const poNum = po.getValue('tranid');
+
+                        // ---------- GET SO FROM PO ----------
+                        const soId = po.getValue('createdfrom');
+                        log.debug('PO createdfrom value', `PO: ${poNum}, SO ID: ${soId}`);
 
                         if (!soId) {
-                            log.audit('PO not linked to SO', `PO ${poId} has no Sales Order link.`);
+                            log.audit('No SO Linked', `PO ${poNum} has no linked Sales Order`);
                             return;
                         }
 
-                        // ---------- LOAD SALES ORDER ----------
-                        const so = record.load({ type: record.Type.SALES_ORDER, id: soId });
-                        const soNum = so.getValue('tranid');
-                        const soEmployeeId = so.getValue('employee');
-
-                        if (!soEmployeeId) {
-                            log.audit('No Employee on SO', `SO ${soNum} has no employee assigned`);
+                        // ---------- USE LOOKUP INSTEAD OF LOADING SO ----------
+                        let soData;
+                        try {
+                            soData = search.lookupFields({
+                                type: search.Type.SALES_ORDER,
+                                id: soId,
+                                columns: ['recordtype', 'tranid', 'salesrep']
+                            });
+                            log.debug('SO Lookup Result', JSON.stringify(soData));
+                        } catch (lookupError) {
+                            log.error('SO Lookup Failed', `soId: ${soId}, Error: ${lookupError.message}`);
                             return;
                         }
 
-                        // ---------- LOAD EMPLOYEE (CREATOR) ----------
+                        // Check if it's actually a Sales Order
+                        if (soData.recordtype !== 'salesorder') {
+                            log.audit('Not a Sales Order', `PO ${poNum} was created from: ${soData.recordtype} (ID: ${soId})`);
+                            return;
+                        }
+
+                        const soNum = soData.tranid;
+
+                        // ---------- GET SALES REP (EMPLOYEE) ID ----------
+                        let employeeId = null;
+                        if (soData.salesrep && soData.salesrep.length > 0) {
+                            employeeId = soData.salesrep[0].value;
+                        }
+
+                        if (!employeeId) {
+                            log.audit('No Sales Rep Found', `SO ${soNum} has no sales rep assigned`);
+                            return;
+                        }
+
+                        log.debug('Sales Rep ID Found', `Employee ID: ${employeeId}`);
+
+                        // ---------- GET EMPLOYEE EMAIL ----------
                         let recipientEmail = null;
                         try {
-                            const empRec = record.load({ type: record.Type.EMPLOYEE, id: soEmployeeId });
-                            recipientEmail = empRec.getValue('email');
+                            const empData = search.lookupFields({
+                                type: search.Type.EMPLOYEE,
+                                id: employeeId,
+                                columns: ['email']
+                            });
+                            recipientEmail = empData.email;
+
                             if (!recipientEmail) {
-                                log.audit('No Email Found', `Employee ID ${soEmployeeId} has no email`);
+                                log.audit('No Email Found', `Employee ID ${employeeId} has no email`);
                                 return;
                             }
-                            log.debug('Employee Email Found', `${recipientEmail} (Employee ID: ${soEmployeeId})`);
+                            log.debug('Employee Email Found', `${recipientEmail} (Employee ID: ${employeeId})`);
                         } catch (empErr) {
-                            log.error('Employee Load Failed', empErr);
+                            log.error('Employee Lookup Failed', empErr.message);
                             return;
                         }
 
                         // ---------- BUILD EMAIL ----------
-                        let body = `<p>Hello,</p>
-                            <p>The following items have been received in the warehouse for Sales Order <strong>${soNum}</strong>:</p>
-                            <ul>`;
+                        let body = `<p>Hello,</p><p>The following items have been received for Sales Order <strong>${soNum}</strong> (linked to PO ${poNum}):</p><ul>`;
                         newReceivedLines.forEach(line => {
                             body += `<li>${line.itemName} — Quantity Received: ${line.qtyReceived}</li>`;
                         });
-                        body += `</ul>
-                            <p><a href="https://3461249-sb1.app.netsuite.com/app/accounting/transactions/salesord.nl?id=${soId}">
-                            View Sales Order</a></p>`;
+                        body += `</ul><p><a href="https://3461249-sb1.app.netsuite.com/app/accounting/transactions/salesord.nl?id=${soId}">View Sales Order</a> | <a href="https://3461249-sb1.app.netsuite.com/app/accounting/transactions/purchord.nl?id=${poId}">View Purchase Order</a></p>`;
 
                         // ---------- SEND EMAIL ----------
-                        log.audit('Sending Email', `IR ${irId} → SO ${soNum} → Recipient: ${recipientEmail}`);
+                        log.audit('Sending Email', `IR ${irId} → PO ${poNum} → SO ${soNum} → Recipient: ${recipientEmail}`);
                         email.send({
-                            author: soEmployeeId, // internal ID of employee
+                            author: employeeId,
                             recipients: recipientEmail,
                             subject: `Item(s) Received for Sales Order ${soNum}`,
                             body: body
@@ -118,13 +150,13 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                         ir.save();
                         log.debug('IR Processed', `IR ${irId} processed successfully. Lines notified: ${newReceivedLines.length}`);
 
-                    } catch (err) {
-                        log.error('IR Processing Error', err);
+                    } catch (irError) {
+                        log.error(`IR Processing Error ${result.getValue('internalid')}`, irError.message || irError);
                     }
                 });
 
             } catch (e) {
-                log.error('Scheduled Script Error', e);
+                log.error('Scheduled Script Error', e.message || e);
             }
         };
 
