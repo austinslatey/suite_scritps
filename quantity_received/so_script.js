@@ -7,11 +7,14 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
 
         const execute = (context) => {
             try {
-                log.debug('Scheduled Script Start', `Triggered at ${new Date().toISOString()}`);
+                log.audit('Scheduled Script Start', `Triggered at ${new Date().toISOString()}`);
 
                 // ---------- CONFIG ----------
-                const startDate = '10/01/2025'; // MM/DD/YYYY
-                const maxResults = 100;         // max IRs per run
+                // Only process Item Receipts created on or after this date (MM/DD/YYYY format)
+                const startDate = '11/4/2025';
+
+                // Maximum number of Item Receipts to process per execution
+                const maxResults = 100;
 
                 // ---------- SEARCH ITEM RECEIPTS ----------
                 const irSearch = search.create({
@@ -22,9 +25,11 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
 
                 const results = irSearch.run().getRange({ start: 0, end: maxResults });
                 if (!results || results.length === 0) {
-                    log.debug('Scheduled Script', 'No Item Receipts found for processing.');
+                    log.audit('No Items to Process', 'No Item Receipts found for processing.');
                     return;
                 }
+
+                log.audit('Processing Start', `Found ${results.length} Item Receipt(s) to process`);
 
                 // ---------- PROCESS EACH IR ----------
                 results.forEach(result => {
@@ -32,7 +37,6 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                         const irId = result.getValue('internalid');
                         const poId = result.getValue('createdfrom');
 
-                        log.debug('Processing IR Start', `IR ID: ${irId}, PO: ${poId}`);
                         if (!poId) return;
 
                         // Load IR
@@ -59,22 +63,20 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
 
                         // ---------- GET SO FROM PO ----------
                         const soId = po.getValue('createdfrom');
-                        log.debug('PO createdfrom value', `PO: ${poNum}, SO ID: ${soId}`);
 
                         if (!soId) {
-                            log.audit('No SO Linked', `PO ${poNum} has no linked Sales Order`);
+                            log.audit('Skipped - No SO Linked', `PO ${poNum} has no linked Sales Order`);
                             return;
                         }
 
-                        // ---------- USE LOOKUP INSTEAD OF LOADING SO ----------
+                        // ---------- USE LOOKUP TO GET SO DATA INCLUDING CREATOR ----------
                         let soData;
                         try {
                             soData = search.lookupFields({
                                 type: search.Type.SALES_ORDER,
                                 id: soId,
-                                columns: ['recordtype', 'tranid', 'salesrep']
+                                columns: ['recordtype', 'tranid', 'salesrep', 'createdby']
                             });
-                            log.debug('SO Lookup Result', JSON.stringify(soData));
                         } catch (lookupError) {
                             log.error('SO Lookup Failed', `soId: ${soId}, Error: ${lookupError.message}`);
                             return;
@@ -82,7 +84,7 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
 
                         // Check if it's actually a Sales Order
                         if (soData.recordtype !== 'salesorder') {
-                            log.audit('Not a Sales Order', `PO ${poNum} was created from: ${soData.recordtype} (ID: ${soId})`);
+                            log.audit('Skipped - Not a Sales Order', `PO ${poNum} was created from: ${soData.recordtype}`);
                             return;
                         }
 
@@ -92,78 +94,23 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                         let salesRepId = null;
                         if (soData.salesrep && soData.salesrep.length > 0) {
                             salesRepId = soData.salesrep[0].value;
-                            log.debug('Sales Rep Found', `SO ${soNum} - Sales Rep ID: ${salesRepId}`);
-                        } else {
-                            log.debug('No Sales Rep', `SO ${soNum} has no sales rep assigned`);
                         }
 
-                        // ---------- FIND WHO CREATED THE SO (SYSTEM NOTES) ----------
+                        // ---------- GET CREATOR ID ----------
                         let creatorId = null;
-                        try {
-                            log.debug('System Notes Search', `Searching for creation of SO ID: ${soId}`);
-
-                            const systemNotesSearch = search.create({
-                                type: search.Type.SYSTEM_NOTE,
-                                filters: [
-                                    ['recordid', 'anyof', soId],
-                                    'AND',
-                                    ['type', 'is', 'Create'],
-                                    'AND',
-                                    ['field', 'is', 'RECORD']
-                                ],
-                                columns: [
-                                    search.createColumn({ name: 'name' }),
-                                    search.createColumn({ name: 'date', sort: search.Sort.DESC }),
-                                    search.createColumn({ name: 'field' }),
-                                    search.createColumn({ name: 'type' }),
-                                    search.createColumn({ name: 'record' }),
-                                    search.createColumn({ name: 'recordid' })
-                                ]
-                            });
-
-                            const systemNoteResults = systemNotesSearch.run().getRange({ start: 0, end: 1 });
-
-                            log.debug('System Notes Results', `Found ${systemNoteResults ? systemNoteResults.length : 0} system notes with field=RECORD`);
-
-                            if (systemNoteResults && systemNoteResults.length > 0) {
-                                const note = systemNoteResults[0];
-                                const noteData = {
-                                    name: note.getValue('name'),
-                                    nameText: note.getText('name'),
-                                    field: note.getValue('field'),
-                                    type: note.getValue('type'),
-                                    date: note.getValue('date'),
-                                    record: note.getValue('record'),
-                                    recordid: note.getValue('recordid')
-                                };
-                                log.debug('System Note Details', JSON.stringify(noteData));
-
-                                // The 'name' field contains the employee ID
-                                creatorId = note.getValue('name');
-
-                                if (creatorId) {
-                                    log.debug('SO Creator Found', `SO ${soNum} created by Employee ID: ${creatorId}`);
-                                } else {
-                                    log.debug('No Creator ID', 'name field was empty');
-                                }
-                            } else {
-                                log.debug('No System Notes Found', `SO ${soNum} has no system note with type=Create and field=RECORD`);
-                            }
-                        } catch (sysNoteErr) {
-                            log.error('System Note Search Failed', `soId: ${soId}, Error: ${sysNoteErr.message}`);
+                        if (soData.createdby && soData.createdby.length > 0) {
+                            creatorId = soData.createdby[0].value;
                         }
 
                         // ---------- COLLECT UNIQUE RECIPIENTS ----------
-                        const recipientIds = new Set(); // Use Set to avoid duplicates
+                        const recipientIds = new Set();
                         if (salesRepId) recipientIds.add(salesRepId);
                         if (creatorId) recipientIds.add(creatorId);
 
                         if (recipientIds.size === 0) {
-                            log.audit('No Recipients', `SO ${soNum} has no sales rep or creator to notify`);
+                            log.audit('Skipped - No Recipients', `SO ${soNum} has no sales rep or creator to notify`);
                             return;
                         }
-
-                        log.debug('Recipients to Notify', `Employee IDs: ${Array.from(recipientIds).join(', ')}`);
 
                         // ---------- GET EMAIL ADDRESSES FOR ALL RECIPIENTS ----------
                         const recipientEmails = [];
@@ -177,9 +124,8 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
 
                                 if (empData.email) {
                                     recipientEmails.push(empData.email);
-                                    log.debug('Email Found', `Employee ID ${empId} (${empData.entityid}): ${empData.email}`);
                                 } else {
-                                    log.audit('No Email', `Employee ID ${empId} has no email address`);
+                                    log.audit('Skipped - No Email', `Employee ID ${empId} has no email address`);
                                 }
                             } catch (empErr) {
                                 log.error('Employee Lookup Failed', `Employee ID ${empId}: ${empErr.message}`);
@@ -187,7 +133,7 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                         }
 
                         if (recipientEmails.length === 0) {
-                            log.audit('No Email Addresses', `No valid email addresses found for SO ${soNum} recipients`);
+                            log.audit('Skipped - No Email Addresses', `No valid email addresses for SO ${soNum} recipients`);
                             return;
                         }
 
@@ -196,14 +142,13 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                         newReceivedLines.forEach(line => {
                             body += `<li>${line.itemName} — Quantity Received: ${line.qtyReceived}</li>`;
                         });
-                        body += `</ul><p><a href="https://3461249-sb1.app.netsuite.com/app/accounting/transactions/salesord.nl?id=${soId}">View Sales Order</a> | <a href="https://3461249-sb1.app.netsuite.com/app/accounting/transactions/purchord.nl?id=${poId}">View Purchase Order</a></p>`;
+                        body += `</ul><p><a href="https://3461249.app.netsuite.com/app/accounting/transactions/salesord.nl?id=${soId}">View Sales Order</a> | <a href="https://3461249-sb1.app.netsuite.com/app/accounting/transactions/purchord.nl?id=${poId}">View Purchase Order</a></p>`;
 
                         // ---------- SEND EMAIL ----------
-                        // Use the first recipient ID as the author
                         const authorId = Array.from(recipientIds)[0];
                         const recipientList = recipientEmails.join(', ');
 
-                        log.audit('Sending Email', `IR ${irId} → PO ${poNum} → SO ${soNum} → Recipients: ${recipientList}`);
+                        log.audit('Email Sent', `IR ${irId} | PO ${poNum} | SO ${soNum} | To: ${recipientList}`);
                         email.send({
                             author: authorId,
                             recipients: recipientEmails,
@@ -222,12 +167,13 @@ define(['N/record', 'N/search', 'N/email', 'N/runtime', 'N/log'],
                         });
 
                         ir.save();
-                        log.debug('IR Processed', `IR ${irId} processed successfully. Lines notified: ${newReceivedLines.length}. Emails sent to: ${recipientList}`);
 
                     } catch (irError) {
                         log.error(`IR Processing Error ${result.getValue('internalid')}`, irError.message || irError);
                     }
                 });
+
+                log.audit('Scheduled Script Complete', `Processed ${results.length} Item Receipt(s)`);
 
             } catch (e) {
                 log.error('Scheduled Script Error', e.message || e);
