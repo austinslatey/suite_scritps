@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import OAuth from 'oauth-1.0a';
 
 const netsuiteRequest = async ({ method, data, params }) => {
-     // e.g. /app/site/hosting/restlet.nl
+    // e.g. /app/site/hosting/restlet.nl
     const baseUrl = process.env.NETSUITE_DOWNLOAD_RESTLET_URL.split('?')[0];
     const scriptDeploy = new URLSearchParams(process.env.NETSUITE_DOWNLOAD_RESTLET_URL.split('?')[1]);
 
