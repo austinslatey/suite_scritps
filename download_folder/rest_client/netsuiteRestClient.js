@@ -2,64 +2,50 @@ import axios from 'axios';
 import crypto from 'crypto';
 import OAuth from 'oauth-1.0a';
 
-const {
-    NETSUITE_ACCOUNT_ID,
-    NETSUITE_CONSUMER_KEY,
-    NETSUITE_CONSUMER_SECRET,
-    NETSUITE_TOKEN_ID,
-    NETSUITE_TOKEN_SECRET,
-} = process.env;
+const netsuiteRequest = async ({ method, data, params }) => {
+     // e.g. /app/site/hosting/restlet.nl
+    const baseUrl = process.env.NETSUITE_DOWNLOAD_RESTLET_URL.split('?')[0];
+    const scriptDeploy = new URLSearchParams(process.env.NETSUITE_DOWNLOAD_RESTLET_URL.split('?')[1]);
 
-/**
- * Generates OAuth 1.0a signed headers for NetSuite REST API calls
- */
-function getAuthHeader(url, method = 'GET') {
+    // Build full URL 
+    const urlObj = new URL(baseUrl, 'https://' + process.env.NETSUITE_ACCOUNT_ID + '.restlets.api.netsuite.com');
+    scriptDeploy.forEach((v, k) => urlObj.searchParams.set(k, v));
+    if (params) {
+        Object.entries(params).forEach(([k, v]) => urlObj.searchParams.set(k, v));
+    }
+    const fullUrl = urlObj.toString();
+
     const oauth = OAuth({
         consumer: {
-            key: NETSUITE_CONSUMER_KEY,
-            secret: NETSUITE_CONSUMER_SECRET,
+            key: process.env.NETSUITE_CONSUMER_KEY,
+            secret: process.env.NETSUITE_CONSUMER_SECRET,
         },
         signature_method: 'HMAC-SHA256',
-        hash_function(baseString, key) {
-            return crypto.createHmac('sha256', key).update(baseString).digest('base64');
-        },
+        hash_function: (base, key) => crypto.createHmac('sha256', key).update(base).digest('base64')
     });
 
     const token = {
-        key: NETSUITE_TOKEN_ID,
-        secret: NETSUITE_TOKEN_SECRET,
+        key: process.env.NETSUITE_TOKEN_ID,
+        secret: process.env.NETSUITE_TOKEN_SECRET,
     };
 
-    const requestData = { url, method };
-    const oauthHeader = oauth.toHeader(oauth.authorize(requestData, token));
-    oauthHeader.Authorization += `, realm="${NETSUITE_ACCOUNT_ID}"`;
-    return oauthHeader;
-}
+    const requestData = { url: fullUrl, method: method.toUpperCase() };
+    const authHeader = oauth.toHeader(oauth.authorize(requestData, token)).Authorization;
+    const finalAuth = `${authHeader}, realm="${process.env.NETSUITE_ACCOUNT_ID}"`;
 
-/**
- * Performs a signed REST request to NetSuite
- */
-async function netsuiteRequest({ method = 'GET', path, params, data, responseType = 'json' }) {
-    if (!path.startsWith('/')) path = `/${path}`;
-
-    const baseUrl = `https://${NETSUITE_ACCOUNT_ID}.suitetalk.api.netsuite.com/services/rest`;
-    const url = `${baseUrl}${path}`;
-    const headers = {
-        ...getAuthHeader(url, method),
-        'Content-Type': 'application/json',
+    const config = {
+        method: method.toUpperCase(),
+        url: fullUrl,
+        headers: {
+            'Authorization': finalAuth,
+            'Content-Type': 'application/json'
+        },
+        data: data,
+        timeout: 30000
     };
 
-    try {
-        const res = await axios({ url, method, params, data, headers, responseType });
-        return res.data;
-    } catch (err) {
-        console.error('NetSuite REST Error:', {
-            status: err.response?.status,
-            data: err.response?.data,
-            message: err.message,
-        });
-        throw new Error(err.response?.data?.title || err.message);
-    }
-}
+    const response = await axios(config);
+    return response.data;
+};
 
 export { netsuiteRequest };
