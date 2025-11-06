@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { netsuiteRequest } from './rest_client/netsuiteRestClient';
+import { netsuiteRequest } from './rest_client/netsuiteRestClient.js';
 import dotenv from 'dotenv';
 
 // Load environment variables
