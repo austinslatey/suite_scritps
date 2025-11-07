@@ -77,9 +77,12 @@ const downloadFile = async (fileInfo) => {
 // 3. Write CSV (one file, exact headers)
 // ---------------------------------------------------------------------
 const writeCsv = async (files) => {
+    const ACCOUNT_ID = process.env.NETSUITE_ACCOUNT_ID;
+    const BASE_URL = `https://${ACCOUNT_ID}.app.netsuite.com`;
+
     const records = files.map(f => ({
         name: f.name,
-        url: f.publicUrl,
+        url: `${BASE_URL}${f.publicUrl}`,
         size: f.size,
         type: f.fileType
     }));
