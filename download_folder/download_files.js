@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'fs';
 import path from 'path';
-import { netsuiteRequest } from './rest_client/netsuiteRestClient.js';
+import { netsuiteRequest, withRetry } from './rest_client/netsuiteRestClient.js';
 import dotenv from 'dotenv';
 import { createObjectCsvWriter } from 'csv-writer';
 import inquirer from 'inquirer';
@@ -9,62 +9,77 @@ import inquirer from 'inquirer';
 dotenv.config();
 
 const OUTPUT_DIR = './downloads';
-const CSV_FILE = process.env.CSV_OUTPUT || 'files.csv';
+const CSV_FILE = process.env.CSV_OUTPUT || 'shopify_files.csv';
 const ROOT_FOLDER_ID = process.env.ROOT_FOLDER_ID;
-const ACCOUNT_ID = process.env.NETSUITE_ACCOUNT_ID;
-const RESTLET_BASE = process.env.NETSUITE_DOWNLOAD_RESTLET_URL;
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 // ---------------------------------------------------------------------
-// 1. Build the *real* NetSuite file-cabinet URL (public / internal)
-// ---------------------------------------------------------------------
-const buildPublicFileUrl = (fileId) => {
-    // NetSuite file-cabinet URL pattern:
-    // https://{account}.app.netsuite.com/core/media/media.nl?id={fileId}&c={account}&h={hash}
-    // The hash is **not** needed for internal users – we can omit it.
-    const base = `https://${ACCOUNT_ID}.app.netsuite.com/core/media/media.nl`;
-    const params = new URLSearchParams({ id: fileId, c: ACCOUNT_ID });
-    return `${base}?${params.toString()}`;
-};
-
-// ---------------------------------------------------------------------
-// 2. RESTlet helpers
+// 1. List files + get full public URL from RESTlet
 // ---------------------------------------------------------------------
 const listFiles = async (folderId) => {
-    const resp = await netsuiteRequest({
+    const resp = await withRetry(() => netsuiteRequest({
         method: 'POST',
         data: { folderId }
-    });
+    }));
     if (resp.error) throw new Error(resp.error);
-    return resp.files || [];
-};
 
-const downloadFile = async (fileInfo) => {
-    const { id, name } = fileInfo;
-    const resp = await netsuiteRequest({
-        method: 'GET',
-        params: { fileId: id }
-    });
+    const files = resp.files || [];
 
-    if (resp.error || !resp.content) {
-        console.error(`Failed ${name}: ${resp.error || 'no content'}`);
-        return;
+    // Serialize GETs: Process one file at a time
+    for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        console.log(`Fetching URL for ${f.name} (${i + 1}/${files.length})...`);
+
+        try {
+            const getResp = await netsuiteRequest({
+                method: 'GET',
+                params: { fileId: f.id, skipContent: 'true' }
+            });
+            if (getResp.error || !getResp.url) {
+                f.publicUrl = 'ERROR: No URL';
+                f.content = null;
+            } else {
+                f.publicUrl = getResp.url;
+                f.content = getResp.content;
+            }
+        } catch (err) {
+            console.error(`Failed to fetch ${f.name}:`, err.message);
+            f.publicUrl = 'ERROR: Fetch failed';
+            f.content = null;
+        }
+
+        // Delay 1-2s between requests to respect concurrency
+        if (i < files.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+        }
     }
 
-    const buffer = Buffer.from(resp.content, 'base64');
+    return files;
+};
+
+// ---------------------------------------------------------------------
+// 2. Download
+// ---------------------------------------------------------------------
+const downloadFile = async (fileInfo) => {
+    const { name, content } = fileInfo;
+    if (!content) {
+        console.error(`No content for ${name}`);
+        return;
+    }
+    const buffer = Buffer.from(content, 'base64');
     const filePath = path.join(OUTPUT_DIR, name);
     fs.writeFileSync(filePath, buffer);
     console.log(`Downloaded ${name}`);
 };
 
 // ---------------------------------------------------------------------
-// 3. CSV writer
+// 3. Write CSV (one file, exact headers)
 // ---------------------------------------------------------------------
 const writeCsv = async (files) => {
     const records = files.map(f => ({
         name: f.name,
-        internalUrl: buildPublicFileUrl(f.id),   // <-- REAL NetSuite URL
+        url: f.publicUrl,
         size: f.size,
         type: f.fileType
     }));
@@ -73,18 +88,18 @@ const writeCsv = async (files) => {
         path: CSV_FILE,
         header: [
             { id: 'name', title: 'File Name' },
-            { id: 'internalUrl', title: 'NetSuite URL' },
+            { id: 'url', title: 'NetSuite URL' },
             { id: 'size', title: 'Size (bytes)' },
             { id: 'type', title: 'File Type' }
         ]
     });
 
     await csvWriter.writeRecords(records);
-    console.log(`CSV saved: ${CSV_FILE} (${records.length} rows)`);
+    console.log(`CSV generated: ${CSV_FILE} (${records.length} rows)`);
 };
 
 // ---------------------------------------------------------------------
-// 4. Inquirer menu
+// 4. Inquirer Menu
 // ---------------------------------------------------------------------
 const askMode = async () => {
     const { mode } = await inquirer.prompt([
