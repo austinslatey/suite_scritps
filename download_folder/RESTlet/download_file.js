@@ -8,6 +8,7 @@ define(['N/file', 'N/search'], function (file, search) {
     function get(context) {
         try {
             const fileId = context.fileId;
+            const skipContent = context.skipContent === 'true';  // Flag from client
             if (!fileId) throw new Error('fileId is required');
 
             const fileObj = file.load({ id: fileId });
@@ -17,7 +18,8 @@ define(['N/file', 'N/search'], function (file, search) {
                 name: fileObj.name,
                 fileType: fileObj.fileType,
                 size: fileObj.size,
-                content: fileObj.getContents()          // base64 string
+                url: fileObj.url,  // Public URL with hash
+                content: skipContent ? null : fileObj.getContents()  // Skip for CSV-only
             };
         } catch (e) {
             return { error: e.message };
@@ -34,20 +36,18 @@ define(['N/file', 'N/search'], function (file, search) {
             search.create({
                 type: 'file',
                 filters: [
-                    ['folder', 'anyof', folderId],
-                    'AND',
-                    ['isinactive', 'is', 'F']
+                    ['folder', 'anyof', folderId]
                 ],
                 columns: [
                     'name',
+                    'documentsize',  // ← Correct column for file size in bytes
                     'filetype'
                 ]
             }).run().each(function (r) {
-                const fileObj = file.load({ id: r.id });
                 results.push({
                     id: r.id,
                     name: r.getValue('name'),
-                    size: fileObj.size,
+                    size: Number(r.getValue('documentsize')) || 0,
                     fileType: r.getValue('filetype')
                 });
                 return true;
