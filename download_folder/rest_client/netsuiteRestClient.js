@@ -48,4 +48,19 @@ const netsuiteRequest = async ({ method, data, params }) => {
     return response.data;
 };
 
-export { netsuiteRequest };
+const withRetry = async (fn, maxRetries = 3) => {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err.response?.status === 400 && i < maxRetries - 1) {
+        console.log(`Retry ${i + 1}/${maxRetries} after 2s...`);
+        await new Promise(resolve => setTimeout(resolve, 2000 * (i + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+};
+
+export { netsuiteRequest, withRetry };
