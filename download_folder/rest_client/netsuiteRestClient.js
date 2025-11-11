@@ -3,49 +3,47 @@ import crypto from 'crypto';
 import OAuth from 'oauth-1.0a';
 
 const netsuiteRequest = async ({ method, data, params }) => {
-    // e.g. /app/site/hosting/restlet.nl
-    const baseUrl = process.env.NETSUITE_DOWNLOAD_RESTLET_URL.split('?')[0];
-    const scriptDeploy = new URLSearchParams(process.env.NETSUITE_DOWNLOAD_RESTLET_URL.split('?')[1]);
+  const baseUrl = process.env.NETSUITE_DOWNLOAD_RESTLET_URL.split('?')[0];
+  const scriptDeploy = new URLSearchParams(process.env.NETSUITE_DOWNLOAD_RESTLET_URL.split('?')[1] || '');
 
-    // Build full URL 
-    const urlObj = new URL(baseUrl, 'https://' + process.env.NETSUITE_ACCOUNT_ID + '.restlets.api.netsuite.com');
-    scriptDeploy.forEach((v, k) => urlObj.searchParams.set(k, v));
-    if (params) {
-        Object.entries(params).forEach(([k, v]) => urlObj.searchParams.set(k, v));
-    }
-    const fullUrl = urlObj.toString();
+  const urlObj = new URL(baseUrl, 'https://' + process.env.NETSUITE_ACCOUNT_ID + '.restlets.api.netsuite.com');
+  scriptDeploy.forEach((v, k) => urlObj.searchParams.set(k, v));
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => urlObj.searchParams.set(k, v));
+  }
+  const fullUrl = urlObj.toString();
 
-    const oauth = OAuth({
-        consumer: {
-            key: process.env.NETSUITE_CONSUMER_KEY,
-            secret: process.env.NETSUITE_CONSUMER_SECRET,
-        },
-        signature_method: 'HMAC-SHA256',
-        hash_function: (base, key) => crypto.createHmac('sha256', key).update(base).digest('base64')
-    });
+  const oauth = OAuth({
+    consumer: {
+      key: process.env.NETSUITE_CONSUMER_KEY,
+      secret: process.env.NETSUITE_CONSUMER_SECRET,
+    },
+    signature_method: 'HMAC-SHA256',
+    hash_function: (base, key) => crypto.createHmac('sha256', key).update(base).digest('base64')
+  });
 
-    const token = {
-        key: process.env.NETSUITE_TOKEN_ID,
-        secret: process.env.NETSUITE_TOKEN_SECRET,
-    };
+  const token = {
+    key: process.env.NETSUITE_TOKEN_ID,
+    secret: process.env.NETSUITE_TOKEN_SECRET,
+  };
 
-    const requestData = { url: fullUrl, method: method.toUpperCase() };
-    const authHeader = oauth.toHeader(oauth.authorize(requestData, token)).Authorization;
-    const finalAuth = `${authHeader}, realm="${process.env.NETSUITE_ACCOUNT_ID}"`;
+  const requestData = { url: fullUrl, method: method.toUpperCase() };
+  const authHeader = oauth.toHeader(oauth.authorize(requestData, token)).Authorization;
+  const finalAuth = `${authHeader}, realm="${process.env.NETSUITE_ACCOUNT_ID}"`;
 
-    const config = {
-        method: method.toUpperCase(),
-        url: fullUrl,
-        headers: {
-            'Authorization': finalAuth,
-            'Content-Type': 'application/json'
-        },
-        data: data,
-        timeout: 30000
-    };
+  const config = {
+    method: method.toUpperCase(),
+    url: fullUrl,
+    headers: {
+      'Authorization': finalAuth,
+      'Content-Type': 'application/json'
+    },
+    data: data,
+    timeout: 30000
+  };
 
-    const response = await axios(config);
-    return response.data;
+  const response = await axios(config);
+  return response.data;
 };
 
 const withRetry = async (fn, maxRetries = 3) => {
@@ -53,9 +51,10 @@ const withRetry = async (fn, maxRetries = 3) => {
     try {
       return await fn();
     } catch (err) {
-      if (err.response?.status === 400 && i < maxRetries - 1) {
-        console.log(`Retry ${i + 1}/${maxRetries} after 2s...`);
-        await new Promise(resolve => setTimeout(resolve, 2000 * (i + 1)));
+      if (err.response?.status === 429 || (err.response?.status >= 500) || i < maxRetries - 1) {
+        const delay = 2000 * (i + 1);
+        console.log(`Retry ${i + 1}/${maxRetries} after ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
       throw err;
