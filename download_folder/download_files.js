@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'fs';
 import path from 'path';
-import { netsuiteRequest, withRetry } from './rest_client/netsuiteRestClient.js';
+import { netsuiteRequest } from './rest_client/netsuiteRestClient.js';
 import dotenv from 'dotenv';
 import { createObjectCsvWriter } from 'csv-writer';
 import inquirer from 'inquirer';
@@ -9,204 +9,176 @@ import inquirer from 'inquirer';
 dotenv.config();
 
 const OUTPUT_DIR = './downloads';
-const CSV_FILE = process.env.CSV_OUTPUT || 'shopify_files.csv';
+const CSV_FILE = process.env.CSV_OUTPUT || 'shopify_part_images.csv';
 const ROOT_FOLDER_ID = process.env.ROOT_FOLDER_ID;
+const ACCOUNT_ID = process.env.NETSUITE_ACCOUNT_ID;
+
+if (!ROOT_FOLDER_ID || !ACCOUNT_ID) {
+    console.error('Missing ROOT_FOLDER_ID or NETSUITE_ACCOUNT_ID in .env');
+    process.exit(1);
+}
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
-// Global array to collect all files
-const allFiles = [];
+const filesByFolder = new Map();
+const processedFileIds = new Set();
+let failedFolders = 0;
 
-// ---------------------------------------------------------------------
-// 1. List files in a folder (direct children only)
-// ---------------------------------------------------------------------
-const listFilesInFolder = async (folderId) => {
-    const resp = await withRetry(() => netsuiteRequest({
-        method: 'POST',
-        data: { folderId, searchType: 'file' }
-    }));
-    if (resp.error) throw new Error(resp.error);
-    return resp.files || [];
+// ULTRA-DEFENSIVE request wrapper — never returns undefined
+const safeRequest = async (payload) => {
+    for (let i = 0; i < 8; i++) {
+        try {
+            const resp = await netsuiteRequest(payload);
+            // Force object return even if client is broken
+            if (!resp || typeof resp !== 'object') return { error: 'Invalid response' };
+            return resp;
+        } catch (e) {
+            if (i === 7) return { error: e.message || 'Network error' };
+            await new Promise(r => setTimeout(r, 3000 + Math.random() * 3000));
+        }
+    }
 };
 
-// ---------------------------------------------------------------------
-// 2. List subfolders in a folder
-// ---------------------------------------------------------------------
 const listSubfolders = async (folderId) => {
-    const resp = await withRetry(() => netsuiteRequest({
+    const resp = await safeRequest({
         method: 'POST',
         data: { folderId, searchType: 'folder' }
-    }));
-    if (resp.error) throw new Error(resp.error);
+    });
+    if (resp.error) {
+        console.error(`Subfolder fail ${folderId}:`, resp.error);
+        failedFolders++;
+        return [];
+    }
     return resp.folders || [];
 };
 
-// ---------------------------------------------------------------------
-// 3. Fetch public URL (and optional content) for a single file
-// ---------------------------------------------------------------------
-const fetchFileDetails = async (file, skipContent = true) => {
-    try {
-        const getResp = await netsuiteRequest({
-            method: 'GET',
-            params: { fileId: file.id, skipContent: skipContent ? 'true' : 'false' }
-        });
-
-        if (getResp.error || !getResp.url) {
-            file.publicUrl = 'ERROR: No URL';
-            file.content = null;
-        } else {
-            file.publicUrl = getResp.url;
-            file.content = skipContent ? null : getResp.content;
-        }
-    } catch (err) {
-        console.error(`Failed to fetch ${file.name}:`, err.message);
-        file.publicUrl = 'ERROR: Fetch failed';
-        file.content = null;
-    }
-};
-
-// ---------------------------------------------------------------------
-// 4. Recursive traversal
-// ---------------------------------------------------------------------
-const traverseFolder = async (folderId, depth = 0) => {
-    const indent = '  '.repeat(depth);
-    console.log(`${indent}Scanning folder ID: ${folderId}`);
-
-    // --- Get files ---
-    const files = await listFilesInFolder(folderId);
-    for (let i = 0; i < files.length; i++) {
-        const f = files[i];
-        console.log(`${indent}  [${i + 1}/${files.length}] ${f.name}`);
-
-        // Always get URL; skip content unless downloading
-        await fetchFileDetails(f, true);
-        allFiles.push(f);
-
-        // Rate limit
-        if (i < files.length - 1) {
-            await new Promise(r => setTimeout(r, 1200 + Math.random() * 800));
-        }
-    }
-
-    // --- Get subfolders and recurse ---
-    const subfolders = await listSubfolders(folderId);
-    for (const sub of subfolders) {
-        await traverseFolder(sub.id, depth + 1);
-    }
-};
-
-// ---------------------------------------------------------------------
-// 5. Download file content (if not already fetched)
-// ---------------------------------------------------------------------
-const downloadFile = async (fileInfo) => {
-    const { name, content, publicUrl } = fileInfo;
-
-    if (content) {
-        const buffer = Buffer.from(content, 'base64');
-        const filePath = path.join(OUTPUT_DIR, name);
-        fs.writeFileSync(filePath, buffer);
-        console.log(`Downloaded: ${name}`);
-        return;
-    }
-
-    if (!publicUrl || publicUrl.includes('ERROR')) {
-        console.error(`Skipping ${name}: no valid URL or content`);
-        return;
-    }
-
-    // Fetch full content
-    console.log(`Fetching full content for ${name}...`);
-    await fetchFileDetails(fileInfo, false);
-
-    if (fileInfo.content) {
-        const buffer = Buffer.from(fileInfo.content, 'base64');
-        const filePath = path.join(OUTPUT_DIR, name);
-        fs.writeFileSync(filePath, buffer);
-        console.log(`Downloaded: ${name}`);
-    } else {
-        console.error(`Failed to download content for ${name}`);
-    }
-};
-
-// ---------------------------------------------------------------------
-// 6. Write CSV
-// ---------------------------------------------------------------------
-const writeCsv = async () => {
-    const ACCOUNT_ID = process.env.NETSUITE_ACCOUNT_ID;
-    const BASE_URL = `https://${ACCOUNT_ID}.app.netsuite.com`;
-
-    const records = allFiles.map(f => ({
-        name: f.name,
-        url: f.publicUrl && !f.publicUrl.includes('ERROR') ? `${BASE_URL}${f.publicUrl}` : '',
-        size: f.size,
-        type: f.fileType
-    }));
-
-    const csvWriter = createObjectCsvWriter({
-        path: CSV_FILE,
-        header: [
-            { id: 'name', title: 'File Name' },
-            { id: 'url', title: 'NetSuite URL' },
-            { id: 'size', title: 'Size (bytes)' },
-            { id: 'type', title: 'File Type' }
-        ]
+const listFilesInFolder = async (folderId) => {
+    const resp = await safeRequest({
+        method: 'POST',
+        data: { folderId, searchType: 'file' }
     });
-
-    await csvWriter.writeRecords(records);
-    console.log(`\nCSV generated: ${CSV_FILE} (${records.length} files)`);
+    if (resp.error) {
+        console.error(`File list fail ${folderId}:`, resp.error);
+        failedFolders++;
+        return [];
+    }
+    return resp.files || [];
 };
 
-// ---------------------------------------------------------------------
-// 7. Inquirer Menu
-// ---------------------------------------------------------------------
-const askMode = async () => {
-    const { mode } = await inquirer.prompt([
-        {
-            type: 'list',
-            name: 'mode',
-            message: 'What would you like to do?',
-            choices: [
-                { name: 'Generate CSV with URLs only', value: 'csv' },
-                { name: 'Download files only', value: 'download' },
-                { name: 'Do both (download + CSV)', value: 'both' }
-            ]
-        }
-    ]);
-    return mode;
+const processFileWithUrl = (file) => {
+    file.publicUrl = (file.url && file.url.startsWith('/core')) ? file.url : '';
 };
 
-// ---------------------------------------------------------------------
-// 8. Main
-// ---------------------------------------------------------------------
-(async () => {
-    try {
-        if (!ROOT_FOLDER_ID) {
-            throw new Error('ROOT_FOLDER_ID is required in .env');
-        }
+const traverseFolder = async (folderId, folderName = null, depth = 0) => {
+    const indent = '  '.repeat(depth);
+    const name = folderName ? `"${folderName}"` : `Root (${folderId})`;
+    console.log(`${indent}Scanning: ${name}`);
 
-        console.log(`Starting recursive scan from folder ID: ${ROOT_FOLDER_ID}\n`);
-        await traverseFolder(ROOT_FOLDER_ID);
+    const subfolders = await listSubfolders(folderId);
 
-        console.log(`\nFound ${allFiles.length} file(s) across all folders.\n`);
-
-        if (allFiles.length === 0) return;
-
-        const mode = await askMode();
-
-        if (mode === 'download' || mode === 'both') {
-            console.log(`Downloading ${allFiles.length} file(s)...`);
-            for (const f of allFiles) {
-                await downloadFile(f);
-                await new Promise(r => setTimeout(r, 500)); // Be gentle
+    if (depth > 0 && folderName) {
+        const files = await listFilesInFolder(folderId);
+        if (files.length) {
+            if (!filesByFolder.has(folderName)) filesByFolder.set(folderName, []);
+            const newFiles = files.filter(f => !processedFileIds.has(f.id));
+            if (newFiles.length) {
+                console.log(`${indent}  → ${newFiles.length} image(s)`);
+                newFiles.forEach(f => {
+                    processFileWithUrl(f);
+                    processedFileIds.add(f.id);
+                    filesByFolder.get(folderName).push(f);
+                });
             }
         }
-
-        if (mode === 'csv' || mode === 'both') {
-            await writeCsv();
-        }
-
-        console.log('\nDone!');
-    } catch (err) {
-        console.error('Error:', err.message);
+    } else if (depth === 0) {
+        console.log(`${indent}Skipping root files`);
     }
+
+    const BATCH = 10;
+    for (let i = 0; i < subfolders.length; i += BATCH) {
+        await Promise.all(
+            subfolders.slice(i, i + BATCH).map(s => traverseFolder(s.id, s.name, depth + 1))
+        );
+        if (i + BATCH < subfolders.length) {
+            await new Promise(r => setTimeout(r, 1000));
+        }
+    }
+};
+
+const writeCsv = async () => {
+    const BASE = `https://${ACCOUNT_ID}.app.netsuite.com`;
+    const headers = [{ id: 'Part Number', title: 'Part Number' }];
+    for (let i = 1; i <= 10; i++) {
+        headers.push({ id: `Image Name ${i}`, title: `Image Name ${i}` });
+        headers.push({ id: `Image URL ${i}`, title: `Image URL ${i}` });
+    }
+
+    const records = [];
+    for (const part of [...filesByFolder.keys()].sort()) {
+        let files = [...filesByFolder.get(part)];
+        const main = files.find(f => {
+            const b = f.name.replace(/\.[^.]+$/, '');
+            return b === part || !/[_-]\d+$/.test(b.slice(part.length));
+        });
+        if (main) files = files.filter(f => f.id !== main.id);
+        files.sort((a, b) => {
+            const na = a.name.match(/[_-](\d+)/)?.[1] ?? Infinity;
+            const nb = b.name.match(/[_-](\d+)/)?.[1] ?? Infinity;
+            return na - nb || a.name.localeCompare(b.name);
+        });
+        const ordered = main ? [main, ...files] : files;
+        const row = { 'Part Number': part };
+        for (let i = 0; i < 10; i++) {
+            const f = ordered[i];
+            row[`Image Name ${i + 1}`] = f?.name || '';
+            row[`Image URL ${i + 1}`] = f?.publicUrl ? `${BASE}${f.publicUrl}` : '';
+        }
+        records.push(row);
+    }
+
+    await createObjectCsvWriter({ path: CSV_FILE, header: headers }).writeRecords(records);
+    console.log(`\nCSV READY: ${CSV_FILE} (${records.length} products)`);
+};
+
+(async () => {
+    console.log(`Starting scan of ${ROOT_FOLDER_ID}\n`);
+    const start = Date.now();
+
+    await traverseFolder(ROOT_FOLDER_ID);
+
+    const total = [...filesByFolder.values()].flat().length;
+    const mins = ((Date.now() - start) / 60000).toFixed(1);
+
+    console.log(`\nDONE in ${mins} min | ${total.toLocaleString()} images | ${filesByFolder.size.toLocaleString()} folders`);
+    if (failedFolders) console.log(`${failedFolders} folders failed (expected)`);
+
+    if (!total) return console.log('No images found');
+
+    const { mode } = await inquirer.prompt([{
+        type: 'list', name: 'mode', message: 'Next?',
+        choices: ['CSV only', 'Download images', 'Both']
+    }]);
+
+    if (mode.includes('Download')) {
+        console.log(`\nDownloading ${total} images...`);
+        let ok = 0;
+        for (const f of [...filesByFolder.values()].flat()) {
+            if (f.publicUrl) {
+                try {
+                    const r = await fetch(`https://${ACCOUNT_ID}.app.netsuite.com${f.publicUrl}`);
+                    if (r.ok) {
+                        fs.writeFileSync(path.join(OUTPUT_DIR, f.name), Buffer.from(await r.arrayBuffer()));
+                        if (++ok % 100 === 0) console.log(`   ${ok} downloaded`);
+                    }
+                } catch { }
+                await new Promise(r => setTimeout(r, 70));
+            }
+        }
+    }
+
+    if (mode.includes('CSV')) await writeCsv();
+
+    console.log('\nVICTORY IS YOURS.');
+    console.log(`CSV → ${CSV_FILE}`);
+    if (mode.includes('Download')) console.log(`Images → ${OUTPUT_DIR}/`);
 })();
