@@ -2,77 +2,66 @@
  * @NApiVersion 2.1
  * @NScriptType Restlet
  */
-define(['N/file', 'N/search'], function (file, search) {
+define(['N/search', 'N/log'], function (search, log) {
 
-    // GET → download one file
-    function doGet(context) {
-        try {
-            const fileId = context.fileId;
-            const skipContent = context.skipContent === 'true';
-            if (!fileId) throw new Error('fileId is required');
-
-            const fileObj = file.load({ id: fileId });
-
-            return {
-                id: fileObj.id,
-                name: fileObj.name,
-                fileType: fileObj.fileType,
-                size: fileObj.size,
-                url: fileObj.url,
-                content: skipContent ? null : fileObj.getContents()
-            };
-        } catch (e) {
-            return { error: e.message };
-        }
-    }
-
-    // POST → list files OR folders
     function doPost(context) {
         try {
             const folderId = context.folderId;
-            const searchType = context.searchType || 'file'; // 'file' or 'folder'
-            if (!folderId) throw new Error('folderId is required');
+            const searchType = context.searchType || 'file';
+            if (!folderId) throw new Error('folderId required');
 
             const results = [];
 
             if (searchType === 'folder') {
-                // List subfolders
-                search.create({
+                // FULLY PAGINATED — WORKS WITH 10,000+ FOLDERS
+                const folderSearch = search.create({
                     type: 'folder',
                     filters: [['parent', 'anyof', folderId]],
                     columns: ['name']
-                }).run().each(function (r) {
-                    results.push({
-                        id: r.id,
-                        name: r.getValue('name')
-                    });
-                    return true;
                 });
+
+                const paged = folderSearch.runPaged({ pageSize: 1000 });
+                paged.pageRanges.forEach(pr => {
+                    const page = paged.fetch({ index: pr.index });
+                    page.data.forEach(r => {
+                        results.push({
+                            id: r.id,
+                            name: r.getValue('name') || '(no name)'
+                        });
+                    });
+                });
+
                 return { folders: results };
-            } else {
-                // List files
-                search.create({
-                    type: 'file',
-                    filters: [['folder', 'anyof', folderId]],
-                    columns: ['name', 'documentsize', 'filetype']
-                }).run().each(function (r) {
+            }
+
+            // FILES — ALSO PAGINATED + URL FROM SEARCH (NO file.load!)
+            const fileSearch = search.create({
+                type: 'file',
+                filters: [['folder', 'anyof', folderId]],
+                columns: ['name', 'documentsize', 'filetype', 'url']
+            });
+
+            const paged = fileSearch.runPaged({ pageSize: 1000 });
+            paged.pageRanges.forEach(pr => {
+                const page = paged.fetch({ index: pr.index });
+                page.data.forEach(r => {
                     results.push({
                         id: r.id,
-                        name: r.getValue('name'),
+                        name: r.getValue('name') || '(no name)',
                         size: Number(r.getValue('documentsize')) || 0,
-                        fileType: r.getValue('filetype')
+                        fileType: r.getValue('filetype') || 'UNKNOWN',
+                        url: r.getValue('url') || ''
                     });
-                    return true;
                 });
-                return { files: results };
-            }
+            });
+
+            return { files: results };
+
         } catch (e) {
+            log.error('RESTlet Error', e.message);
             return { error: e.message };
         }
     }
 
-    return {
-        get: doGet,
-        post: doPost
-    };
+    return { post: doPost };
 });
