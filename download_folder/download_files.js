@@ -20,16 +20,19 @@ if (!ROOT_FOLDER_ID || !ACCOUNT_ID) {
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
-const filesByFolder = new Map();
+const filesByFolder = new Map();   // folderName → array of files (for subfolders)
+const rootFiles = [];              // ← NEW: flat list for root-only files
 const processedFileIds = new Set();
 let failedFolders = 0;
+let scanMode = 'nonroot';
 
-// ULTRA-DEFENSIVE request wrapper — never returns undefined
+// ─────────────────────────────────────────────────────────────────────────────
+// Safe request & helpers
+// ─────────────────────────────────────────────────────────────────────────────
 const safeRequest = async (payload) => {
     for (let i = 0; i < 8; i++) {
         try {
             const resp = await netsuiteRequest(payload);
-            // Force object return even if client is broken
             if (!resp || typeof resp !== 'object') return { error: 'Invalid response' };
             return resp;
         } catch (e) {
@@ -40,35 +43,24 @@ const safeRequest = async (payload) => {
 };
 
 const listSubfolders = async (folderId) => {
-    const resp = await safeRequest({
-        method: 'POST',
-        data: { folderId, searchType: 'folder' }
-    });
-    if (resp.error) {
-        console.error(`Subfolder fail ${folderId}:`, resp.error);
-        failedFolders++;
-        return [];
-    }
-    return resp.folders || [];
+    const resp = await safeRequest({ method: 'POST', data: { folderId, searchType: 'folder' } });
+    if (resp.error) { console.error(`Subfolder fail ${folderId}:`, resp.error); failedFolders++; return []; }
+    return Array.isArray(resp.folders) ? resp.folders : [];
 };
 
 const listFilesInFolder = async (folderId) => {
-    const resp = await safeRequest({
-        method: 'POST',
-        data: { folderId, searchType: 'file' }
-    });
-    if (resp.error) {
-        console.error(`File list fail ${folderId}:`, resp.error);
-        failedFolders++;
-        return [];
-    }
-    return resp.files || [];
+    const resp = await safeRequest({ method: 'POST', data: { folderId, searchType: 'file' } });
+    if (resp.error) { console.error(`File list fail ${folderId}:`, resp.error); failedFolders++; return []; }
+    return Array.isArray(resp.files) ? resp.files : [];
 };
 
 const processFileWithUrl = (file) => {
     file.publicUrl = (file.url && file.url.startsWith('/core')) ? file.url : '';
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Traversal
+// ─────────────────────────────────────────────────────────────────────────────
 const traverseFolder = async (folderId, folderName = null, depth = 0) => {
     const indent = '  '.repeat(depth);
     const name = folderName ? `"${folderName}"` : `Root (${folderId})`;
@@ -76,10 +68,31 @@ const traverseFolder = async (folderId, folderName = null, depth = 0) => {
 
     const subfolders = await listSubfolders(folderId);
 
-    if (depth > 0 && folderName) {
+    // ROOT LEVEL
+    if (depth === 0) {
+        if (scanMode !== 'nonroot') {
+            const files = await listFilesInFolder(folderId);
+            if (files.length > 0) {
+                const newFiles = files.filter(f => !processedFileIds.has(f.id));
+                if (newFiles.length) {
+                    console.log(`${indent}  → ${newFiles.length} image(s) in root`);
+                    newFiles.forEach(f => {
+                        processFileWithUrl(f);
+                        processedFileIds.add(f.id);
+                        rootFiles.push(f);           // ← store separately
+                    });
+                }
+            }
+        } else {
+            console.log(`${indent}Skipping root files (sub-folders only mode)`);
+        }
+    }
+
+    // SUBFOLDERS
+    if (depth > 0 && scanMode !== 'rootonly') {
         const files = await listFilesInFolder(folderId);
-        if (files.length) {
-            if (!filesByFolder.has(folderName)) filesByFolder.set(folderName, []);
+        if (files.length > 0) {
+            filesByFolder.set(folderName, filesByFolder.get(folderName) || []);
             const newFiles = files.filter(f => !processedFileIds.has(f.id));
             if (newFiles.length) {
                 console.log(`${indent}  → ${newFiles.length} image(s)`);
@@ -90,79 +103,131 @@ const traverseFolder = async (folderId, folderName = null, depth = 0) => {
                 });
             }
         }
-    } else if (depth === 0) {
-        console.log(`${indent}Skipping root files`);
     }
 
-    const BATCH = 10;
-    for (let i = 0; i < subfolders.length; i += BATCH) {
-        await Promise.all(
-            subfolders.slice(i, i + BATCH).map(s => traverseFolder(s.id, s.name, depth + 1))
-        );
-        if (i + BATCH < subfolders.length) {
-            await new Promise(r => setTimeout(r, 1000));
+    // RECURSE
+    if (scanMode !== 'rootonly' && subfolders.length > 0) {
+        const BATCH = 10;
+        for (let i = 0; i < subfolders.length; i += BATCH) {
+            await Promise.all(
+                subfolders.slice(i, i + BATCH).map(s => traverseFolder(s.id, s.name, depth + 1))
+            );
+            if (i + BATCH < subfolders.length) await new Promise(r => setTimeout(r, 1000));
         }
     }
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CSV WRITER – different logic for root vs subfolders
+// ─────────────────────────────────────────────────────────────────────────────
 const writeCsv = async () => {
     const BASE = `https://${ACCOUNT_ID}.app.netsuite.com`;
-    const headers = [{ id: 'Part Number', title: 'Part Number' }];
-    for (let i = 1; i <= 10; i++) {
-        headers.push({ id: `Image Name ${i}`, title: `Image Name ${i}` });
-        headers.push({ id: `Image URL ${i}`, title: `Image URL ${i}` });
-    }
+
+    const headers = [
+        { id: 'Part Number', title: 'Part Number' },
+        { id: 'Image Name', title: 'Image Name' },
+        { id: 'Image URL', title: 'Image URL' }
+    ];
 
     const records = [];
-    for (const part of [...filesByFolder.keys()].sort()) {
+
+    // 1. ROOT FILES – one row per image (flat list)
+    if (rootFiles.length > 0) {
+        rootFiles.forEach(f => {
+            records.push({
+                'Part Number': 'ROOT_FILE',           // or f.name, or leave blank – you choose
+                'Image Name': f.name,
+                'Image URL': f.publicUrl ? `${BASE}${f.publicUrl}` : ''
+            });
+        });
+    }
+
+    // 2. SUBFOLDER FILES – your original grouped logic (up to 10 images per part)
+    const subfolderKeys = [...filesByFolder.keys()].sort((a, b) => a.localeCompare(b));
+    for (const part of subfolderKeys) {
         let files = [...filesByFolder.get(part)];
+
         const main = files.find(f => {
-            const b = f.name.replace(/\.[^.]+$/, '');
-            return b === part || !/[_-]\d+$/.test(b.slice(part.length));
+            const base = f.name.replace(/\.[^.]+$/, '');
+            return base === part || !/[_-]\d+$/.test(base.slice(part.length));
         });
         if (main) files = files.filter(f => f.id !== main.id);
+
         files.sort((a, b) => {
             const na = a.name.match(/[_-](\d+)/)?.[1] ?? Infinity;
             const nb = b.name.match(/[_-](\d+)/)?.[1] ?? Infinity;
             return na - nb || a.name.localeCompare(b.name);
         });
+
         const ordered = main ? [main, ...files] : files;
-        const row = { 'Part Number': part };
+
+        const row = { 'Part Number': part, 'Image Name': '', 'Image URL': '' };
         for (let i = 0; i < 10; i++) {
             const f = ordered[i];
-            row[`Image Name ${i + 1}`] = f?.name || '';
-            row[`Image URL ${i + 1}`] = f?.publicUrl ? `${BASE}${f.publicUrl}` : '';
+            if (f) {
+                row['Part Number'] = i === 0 ? part : '';  // only show part number on first row
+                row['Image Name'] = f.name;
+                row['Image URL'] = f.publicUrl ? `${BASE}${f.publicUrl}` : '';
+                records.push({ ...row });
+            }
         }
-        records.push(row);
+        if (ordered.length === 0) {
+            records.push({ 'Part Number': part, 'Image Name': '', 'Image URL': '' });
+        }
     }
 
     await createObjectCsvWriter({ path: CSV_FILE, header: headers }).writeRecords(records);
-    console.log(`\nCSV READY: ${CSV_FILE} (${records.length} products)`);
+    console.log(`\nCSV READY: ${CSV_FILE} (${records.length} rows)`);
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN
+// ─────────────────────────────────────────────────────────────────────────────
 (async () => {
-    console.log(`Starting scan of ${ROOT_FOLDER_ID}\n`);
-    const start = Date.now();
+    console.log(`Starting scan of folder ${ROOT_FOLDER_ID}\n`);
 
+    const { chosenMode } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'chosenMode',
+            message: 'Which files do you want to collect?',
+            choices: [
+                { name: 'Only files in sub-folders (skip root folder files)', value: 'nonroot' },
+                { name: 'Only files that live directly in the root folder', value: 'rootonly' },
+                { name: 'Files from root folder AND all sub-folders (both)', value: 'both' },
+            ],
+            default: 'nonroot'
+        }
+    ]);
+
+    scanMode = chosenMode;
+    console.log(`\nMode selected: ${scanMode
+        .replace('nonroot', 'sub-folders only')
+        .replace('rootonly', 'root only')
+        .replace('both', 'root + sub-folders')}\n`);
+
+    const start = Date.now();
     await traverseFolder(ROOT_FOLDER_ID);
 
-    const total = [...filesByFolder.values()].flat().length;
+    const total = rootFiles.length + [...filesByFolder.values()].flat().length;
     const mins = ((Date.now() - start) / 60000).toFixed(1);
 
-    console.log(`\nDONE in ${mins} min | ${total.toLocaleString()} images | ${filesByFolder.size.toLocaleString()} folders`);
-    if (failedFolders) console.log(`${failedFolders} folders failed (expected)`);
+    console.log(`\nDONE in ${mins} min | ${total.toLocaleString()} images | ${filesByFolder.size} subfolders (+ ${rootFiles.length} root files)`);
+    if (failedFolders) console.log(`${failedFolders} folders failed`);
 
-    if (!total) return console.log('No images found');
+    if (total === 0) {
+        console.log('No images found');
+        process.exit(0);
+    }
 
-    const { mode } = await inquirer.prompt([{
-        type: 'list', name: 'mode', message: 'Next?',
-        choices: ['CSV only', 'Download images', 'Both']
-    }]);
+    const { mode } = await inquirer.prompt([
+        { type: 'list', name: 'mode', message: 'Next?', choices: ['CSV only', 'Download images', 'Both'] }
+    ]);
 
     if (mode.includes('Download')) {
         console.log(`\nDownloading ${total} images...`);
         let ok = 0;
-        for (const f of [...filesByFolder.values()].flat()) {
+        for (const f of [...rootFiles, ...[...filesByFolder.values()].flat()]) {
             if (f.publicUrl) {
                 try {
                     const r = await fetch(`https://${ACCOUNT_ID}.app.netsuite.com${f.publicUrl}`);
@@ -174,6 +239,7 @@ const writeCsv = async () => {
                 await new Promise(r => setTimeout(r, 70));
             }
         }
+        console.log(`\nDownloaded ${ok} images`);
     }
 
     if (mode.includes('CSV')) await writeCsv();
