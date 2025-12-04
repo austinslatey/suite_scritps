@@ -20,8 +20,8 @@ if (!ROOT_FOLDER_ID || !ACCOUNT_ID) {
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
-const filesByFolder = new Map();   // folderName → array of files (for subfolders)
-const rootFiles = [];              // ← NEW: flat list for root-only files
+const filesByFolder = new Map();   // folderName → array of files (subfolders only)
+const rootFiles = [];              // flat list of root files
 const processedFileIds = new Set();
 let failedFolders = 0;
 let scanMode = 'nonroot';
@@ -79,7 +79,7 @@ const traverseFolder = async (folderId, folderName = null, depth = 0) => {
                     newFiles.forEach(f => {
                         processFileWithUrl(f);
                         processedFileIds.add(f.id);
-                        rootFiles.push(f);           // ← store separately
+                        rootFiles.push(f);
                     });
                 }
             }
@@ -118,41 +118,33 @@ const traverseFolder = async (folderId, folderName = null, depth = 0) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CSV WRITER – different logic for root vs subfolders
+// CSV WRITER – CORRECT FORMAT
 // ─────────────────────────────────────────────────────────────────────────────
 const writeCsv = async () => {
     const BASE = `https://${ACCOUNT_ID}.app.netsuite.com`;
 
-    const headers = [
-        { id: 'Part Number', title: 'Part Number' },
-        { id: 'Image Name', title: 'Image Name' },
-        { id: 'Image URL', title: 'Image URL' }
-    ];
+    // Dynamic headers: Part Number + Image Name 1..10 + Image URL 1..10
+    const headers = [{ id: 'Part Number', title: 'Part Number' }];
+    for (let i = 1; i <= 10; i++) {
+        headers.push({ id: `Image Name ${i}`, title: `Image Name ${i}` });
+        headers.push({ id: `Image URL ${i}`, title: `Image URL ${i}` });
+    }
 
     const records = [];
 
-    // 1. ROOT FILES – one row per image (flat list)
-    if (rootFiles.length > 0) {
-        rootFiles.forEach(f => {
-            records.push({
-                'Part Number': 'ROOT_FILE',           // or f.name, or leave blank – you choose
-                'Image Name': f.name,
-                'Image URL': f.publicUrl ? `${BASE}${f.publicUrl}` : ''
-            });
-        });
-    }
-
-    // 2. SUBFOLDER FILES – your original grouped logic (up to 10 images per part)
-    const subfolderKeys = [...filesByFolder.keys()].sort((a, b) => a.localeCompare(b));
-    for (const part of subfolderKeys) {
+    // 1. SUBFOLDER FILES → One row per part number, all images on same row
+    const sortedParts = [...filesByFolder.keys()].sort((a, b) => a.localeCompare(b));
+    for (const part of sortedParts) {
         let files = [...filesByFolder.get(part)];
 
+        // Find main image (no _1, -2 suffix)
         const main = files.find(f => {
             const base = f.name.replace(/\.[^.]+$/, '');
             return base === part || !/[_-]\d+$/.test(base.slice(part.length));
         });
         if (main) files = files.filter(f => f.id !== main.id);
 
+        // Sort numbered images
         files.sort((a, b) => {
             const na = a.name.match(/[_-](\d+)/)?.[1] ?? Infinity;
             const nb = b.name.match(/[_-](\d+)/)?.[1] ?? Infinity;
@@ -160,21 +152,28 @@ const writeCsv = async () => {
         });
 
         const ordered = main ? [main, ...files] : files;
+        const row = { 'Part Number': part };
 
-        const row = { 'Part Number': part, 'Image Name': '', 'Image URL': '' };
         for (let i = 0; i < 10; i++) {
             const f = ordered[i];
-            if (f) {
-                row['Part Number'] = i === 0 ? part : '';  // only show part number on first row
-                row['Image Name'] = f.name;
-                row['Image URL'] = f.publicUrl ? `${BASE}${f.publicUrl}` : '';
-                records.push({ ...row });
-            }
+            row[`Image Name ${i + 1}`] = f?.name || '';
+            row[`Image URL ${i + 1}`] = f?.publicUrl ? `${BASE}${f.publicUrl}` : '';
         }
-        if (ordered.length === 0) {
-            records.push({ 'Part Number': part, 'Image Name': '', 'Image URL': '' });
-        }
+        records.push(row);
     }
+
+    // 2. ROOT FILES → One row per file
+    rootFiles.forEach(f => {
+        const row = { 'Part Number': 'ROOT_FILE' };  // or f.name.split('.')[0], or leave blank
+        row['Image Name 1'] = f.name;
+        row['Image URL 1'] = f.publicUrl ? `${BASE}${f.publicUrl}` : '';
+        // Leave other 18 columns empty
+        for (let i = 2; i <= 10; i++) {
+            row[`Image Name ${i}`] = '';
+            row[`Image URL ${i}`] = '';
+        }
+        records.push(row);
+    });
 
     await createObjectCsvWriter({ path: CSV_FILE, header: headers }).writeRecords(records);
     console.log(`\nCSV READY: ${CSV_FILE} (${records.length} rows)`);
@@ -212,7 +211,7 @@ const writeCsv = async () => {
     const total = rootFiles.length + [...filesByFolder.values()].flat().length;
     const mins = ((Date.now() - start) / 60000).toFixed(1);
 
-    console.log(`\nDONE in ${mins} min | ${total.toLocaleString()} images | ${filesByFolder.size} subfolders (+ ${rootFiles.length} root files)`);
+    console.log(`\nDONE in ${mins} min | ${total.toLocaleString()} images | ${filesByFolder.size} parts (+ ${rootFiles.length} root files)`);
     if (failedFolders) console.log(`${failedFolders} folders failed`);
 
     if (total === 0) {
