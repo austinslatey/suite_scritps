@@ -89,24 +89,28 @@ const traverseFolder = async (folderId, folderName = null, depth = 0) => {
     }
 
     // SUBFOLDERS
-    if (depth > 0 && scanMode !== 'rootonly') {
+    if (depth === partNumberDepth && scanMode !== 'rootonly') {
         const files = await listFilesInFolder(folderId);
+
         if (files.length > 0) {
-            filesByFolder.set(folderName, filesByFolder.get(folderName) || []);
+            const partNumber = folderName;
+
+            filesByFolder.set(partNumber, filesByFolder.get(partNumber) || []);
             const newFiles = files.filter(f => !processedFileIds.has(f.id));
+
             if (newFiles.length) {
-                console.log(`${indent}  → ${newFiles.length} image(s)`);
+                console.log(`${indent}Part: ${partNumber} → ${newFiles.length} image(s)`);
                 newFiles.forEach(f => {
                     processFileWithUrl(f);
                     processedFileIds.add(f.id);
-                    filesByFolder.get(folderName).push(f);
+                    filesByFolder.get(partNumber).push(f);
                 });
             }
         }
     }
 
     // RECURSE
-    if (scanMode !== 'rootonly' && subfolders.length > 0) {
+    if (scanMode !== 'rootonly' && depth < partNumberDepth && subfolders.length > 0) {
         const BATCH = 10;
         for (let i = 0; i < subfolders.length; i += BATCH) {
             await Promise.all(
@@ -200,6 +204,25 @@ const writeCsv = async () => {
     ]);
 
     scanMode = chosenMode;
+
+
+    if (scanMode !== 'rootonly') {
+        const { depth } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'depth',
+                message: 'Where are the part number folders located?',
+                choices: [
+                    { name: 'Directly inside the root (1 level deep) – e.g. Root → Part Folder (images inside)', value: 1 },
+                    { name: 'One level deeper (2 levels deep) – e.g. Root → Class → Part Folder (images inside)', value: 2 },
+                ],
+                default: 1
+            }
+        ]);
+        partNumberDepth = depth;
+    }
+
+
     console.log(`\nMode selected: ${scanMode
         .replace('nonroot', 'sub-folders only')
         .replace('rootonly', 'root only')
