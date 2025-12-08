@@ -20,11 +20,17 @@ if (!ROOT_FOLDER_ID || !ACCOUNT_ID) {
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
-const filesByFolder = new Map();   // folderName → array of files (subfolders only)
-const rootFiles = [];              // flat list of root files
+// folderName → array of files (subfolders only)
+const filesByFolder = new Map();
+
+// flat list of root files
+const rootFiles = [];             
 const processedFileIds = new Set();
 let failedFolders = 0;
 let scanMode = 'nonroot';
+
+// For directory recursion/traversal
+let partNumberDepth = 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Safe request & helpers
